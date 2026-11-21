@@ -1,23 +1,23 @@
-"""``o2-audit`` CLI entrypoint (Stage 04).
+"""``o2-audit`` CLI entrypoint (Stage 05).
 
-Official protocol 1.3.1 adapters (exact argument names):
+All five official protocol 1.3.1 adapters (exact argument names):
 
     o2-audit build --rules RULES_JSONL --config CONFIG_JSON --out BUILD_DIR
     o2-audit infer --input INPUT_JSONL --artifacts BUILD_DIR --out PREDICTIONS_JSONL
     o2-audit annotate --input INPUT_JSONL --targets TARGETS_JSONL --artifacts BUILD_DIR --out ANNOTATIONS_JSONL
+    o2-audit iterate --base BUILD_DIR --feedback FEEDBACK_JSON --input REPAIR_JSONL --out CANDIDATE_DIR
     o2-audit evaluate --plugin PLUGIN_ID --inputs INPUT_JSONL --outputs PREDICTIONS_JSONL --references REFERENCES_JSONL --out REPORT_JSON
 
-Developer/lifecycle subcommands (workspace lives OUTSIDE frozen artifacts):
+Developer/lifecycle/product subcommands (workspace lives OUTSIDE frozen artifacts):
 
     o2-audit status
     o2-audit activate --name NAME
     o2-audit rollback --to NAME
+    o2-audit compare --a NAME_A --b NAME_B
+    o2-audit serve --host 127.0.0.1 --port 8000
 
-``iterate`` is RESERVED for Stage 05: it parses protocol arguments but exits
-NON-ZERO with an explicit "not yet implemented" message — never fake exit 0.
-
-``build`` / ``infer`` / ``annotate`` never read reference labels; evaluation
-runs only inside the isolated ``o2-audit evaluate`` subprocess boundary.
+``build`` / ``infer`` / ``annotate`` / ``iterate`` never read reference labels;
+evaluation runs only inside the isolated ``o2-audit evaluate`` subprocess boundary.
 """
 from __future__ import annotations
 
@@ -37,11 +37,10 @@ from o2_audit.build.lifecycle import (
 )
 from o2_audit.build.loader import ArtifactIntegrityError
 from o2_audit.domain.models import ExecutionError
+from o2_audit.iterate.engine import IterationError, run_iteration
 from o2_audit.protocol.jsonio import ProtocolError, read_json_strict, write_json_atomic
 from o2_audit.resources import resources_root
 from o2_audit.storage.store import TaskStore
-
-_NOT_IMPLEMENTED = "not yet implemented in Stage 04"
 
 
 def workspace_dir(explicit: str | None = None) -> Path:
@@ -61,8 +60,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         return args.handler(args)
-    except (BuildError, ArtifactIntegrityError, ProtocolError, ExecutionError,
-            ValueError, KeyError, FileNotFoundError, OSError) as e:
+    except (BuildError, ArtifactIntegrityError, IterationError, ProtocolError,
+            ExecutionError, ValueError, KeyError, FileNotFoundError, OSError) as e:
         print(f"o2-audit: error: {e}", file=sys.stderr)
         return 1
 
@@ -74,8 +73,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="o2-audit",
-        description="O2 product-review audit core "
-                    "(Stage 03b: build + lifecycle + infer + annotate)")
+        description="O2 product-review ontology-driven audit CLI "
+                    "(Protocol 1.3.1: build + infer + annotate + iterate + evaluate + lifecycle + serve)")
     parser.add_argument(
         "--workspace", default=None,
         help="writable workspace dir for SQLite state "
@@ -143,8 +142,22 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="structured error records JSONL "
                                  "(default: sibling <out>.errors.jsonl)")
     p_annotate.set_defaults(handler=_cmd_annotate)
-    p_iterate = sub.add_parser("iterate", help="[reserved] iterate --base --feedback --input --out")
-    _add_reserved_args(p_iterate, single_input=True, base=True, feedback=True)
+    p_iterate = sub.add_parser(
+        "iterate",
+        help="safely iterate a frozen BUILD_DIR from validated feedback + unlabeled repair input",
+    )
+    p_iterate.add_argument("--base", required=True, help="frozen baseline BUILD_DIR (read-only)")
+    p_iterate.add_argument("--feedback", required=True, help="feedback packet JSON (schema 1.3.1)")
+    p_iterate.add_argument("--input", required=True, help="unlabeled repair tasks JSONL")
+    p_iterate.add_argument("--out", required=True, help="new candidate BUILD_DIR to create")
+    p_iterate.add_argument("--artifact-version", default=None,
+                           help="candidate artifact_version (default: <base>-iter-<feedback_id>)")
+    p_iterate.add_argument("--version-name", default=None,
+                           help="registry version name (default: candidate artifact_version)")
+    p_iterate.add_argument("--force", action="store_true",
+                           help="overwrite an existing non-empty CANDIDATE_DIR")
+    _add_workspace_arg(p_iterate)
+    p_iterate.set_defaults(handler=_cmd_iterate)
 
     p_evaluate = sub.add_parser(
         "evaluate",
@@ -183,6 +196,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="optional plugin manifest JSON overriding bundled plugins_config.json",
     )
     p_evaluate.set_defaults(handler=_cmd_evaluate)
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="start the local FastAPI + Jinja operational product server",
+    )
+    p_serve.add_argument("--host", default="127.0.0.1", help="bind host (default: 127.0.0.1)")
+    p_serve.add_argument("--port", type=int, default=8000, help="bind port (default: 8000)")
+    _add_workspace_arg(p_serve)
+    p_serve.set_defaults(handler=_cmd_serve)
     return parser
 
 
@@ -385,15 +407,34 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
     return 1 if report.get("errors") else 0
 
 
-def _cmd_not_implemented(args: argparse.Namespace) -> int:
-    """Reserved protocol commands NEVER fake exit 0."""
-    print(
-        f"o2-audit {_NOT_IMPLEMENTED}: command {args.command_name!r} is "
-        "reserved for Stage 05 (safe iteration). "
-        "Exiting non-zero; no output files written.",
-        file=sys.stderr,
-    )
-    return 2
+def _cmd_iterate(args: argparse.Namespace) -> int:
+    ws = workspace_dir(_effective_workspace(args))
+    store = TaskStore(ws / "state.sqlite3")
+    try:
+        result = run_iteration(
+            base_dir=args.base,
+            feedback_path=args.feedback,
+            input_jsonl=args.input,
+            out_dir=args.out,
+            artifact_version=args.artifact_version,
+            version_name=args.version_name,
+            store=store,
+            overwrite=args.force,
+        )
+    finally:
+        store.close()
+    print(json.dumps(result.summary(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+    from o2_audit.web.app import create_app
+
+    ws = workspace_dir(_effective_workspace(args))
+    app = create_app(workspace_dir=ws)
+    uvicorn.run(app, host=args.host, port=args.port)
+    return 0
 
 
 if __name__ == "__main__":

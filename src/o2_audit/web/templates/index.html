@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>O2 AI 商品审核官 — 运维与审核工作台</title>
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --surface: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --muted: #656d76;
+      --primary: #0969da;
+      --ok: #1a7f37;
+      --warn: #9a6700;
+      --err: #cf222e;
+      --chip: #eaeef2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      background: #0d1117;
+      color: #f0f6fc;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    header h1 { margin: 0; font-size: 18px; }
+    header .meta { font-size: 12px; color: #8b949e; }
+    nav {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    nav button {
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    nav button.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+      font-weight: 600;
+    }
+    main { max-width: 1320px; margin: 18px auto; padding: 0 20px 40px; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .card h2 { margin: 0 0 10px; font-size: 16px; }
+    .card h3 { margin: 12px 0 8px; font-size: 14px; }
+    .kpi { font-size: 24px; font-weight: 700; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+    input[type="text"], textarea, select {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+      background: #fff;
+    }
+    textarea { width: 100%; min-height: 90px; font-family: ui-monospace, Consolas, monospace; }
+    .btn {
+      background: var(--primary);
+      color: #fff;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn.secondary { background: #fff; color: var(--text); border-color: var(--border); }
+    .btn.danger { background: var(--err); }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 8px 10px; vertical-align: top; }
+    th { background: #f6f8fa; font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--chip);
+    }
+    .badge.ok, .badge.pass, .badge.completed, .badge.succeeded, .badge.active { background: #dafbe1; color: var(--ok); }
+    .badge.warn, .badge.ambiguous, .badge.interrupted, .badge.queued, .badge.running { background: #fff8c5; color: var(--warn); }
+    .badge.err, .badge.reject, .badge.failed, .badge.error { background: #ffebe9; color: var(--err); }
+    .notice {
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: #ddf4ff;
+      border: 1px solid #54aeff66;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .notice.error { background: #ffebe9; border-color: #ff818266; color: var(--err); }
+    .code {
+      background: #f6f8fa;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow-x: auto;
+      max-height: 360px;
+    }
+    .evidence-stage {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      background: #111;
+    }
+    .evidence-stage img { display: block; max-width: 100%; height: auto; }
+    .bbox-overlay {
+      position: absolute;
+      border: 2px solid #ff3b30;
+      background: rgba(255, 59, 48, 0.14);
+      pointer-events: none;
+    }
+    .bbox-label {
+      position: absolute;
+      top: -18px;
+      left: 0;
+      background: #ff3b30;
+      color: #fff;
+      font-size: 10px;
+      padding: 1px 4px;
+      white-space: nowrap;
+    }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>O2 AI 商品审核官 — 规则构建、审核、迭代与评测工作台</h1>
+      <div class="meta">工作目录：{{ workspace_dir }} | 激活版本：{{ versions.active or "未激活" }} | 协议版本：1.3.1</div>
+    </div>
+    <div>
+      <span class="badge ok">单进程持久化 SQLite</span>
+      <span class="badge">冻结产物只读</span>
+    </div>
+  </header>
+
+  <nav id="tabs">
+    <button class="active" data-tab="rules">1. 规则与构建</button>
+    <button data-tab="audit">2. 审核与标注</button>
+    <button data-tab="results">3. 结果与证据</button>
+    <button data-tab="versions">4. 版本与安全迭代</button>
+    <button data-tab="evaluate">5. 对比与隔离评测</button>
+    <button data-tab="jobs">6. 任务队列</button>
+  </nav>
+
+  <main>
+    <div id="flash" class="notice" style="display:none;"></div>
+
+    <!-- KPI overview -->
+    <div class="grid">
+      <div class="card">
+        <div class="muted">已导入规则版本 / 唯一进阶规则</div>
+        <div class="kpi">{{ rules|length }} / {{ adv_unique_count }}</div>
+        <div class="muted">目标基线：62 条（B001@3.0/3.1 + R001–R060@3.0）</div>
+      </div>
+      <div class="card">
+        <div class="muted">当前激活版本 / 已注册版本</div>
+        <div class="kpi">{{ versions.active or "无" }} ({{ versions.versions|length }})</div>
+        <div class="muted">候选版本永不自动激活</div>
+      </div>
+      <div class="card">
+        <div class="muted">持久化任务总数</div>
+        <div class="kpi">{{ jobs|length }}</div>
+        <div class="muted">支持重试、断点续跑与导出</div>
+      </div>
+      <div class="card">
+        <div class="muted">审核结果 / 隔离评测记录</div>
+        <div class="kpi">{{ results|length }} / {{ evals|length }}</div>
+        <div class="muted">开发评测与正式隐藏集严格分离</div>
+      </div>
+    </div>
+
+    <!-- Tab 1: Rules & Build -->
+    <section id="tab-rules" class="panel active">
+      <div class="card">
+        <h2>规则导入（P-TASK-01..03 / P-UX-03）</h2>
+        <div class="row">
+          <button class="btn" onclick="importBundled62()">一键导入内置 62 条公开规则</button>
+          <input type="text" id="rule-file-path" placeholder="或输入规则 JSON / JSONL 本地文件路径" style="min-width: 340px;" />
+          <button class="btn secondary" onclick="importRuleFile()">从路径导入</button>
+        </div>
+        <textarea id="rule-jsonl-text" placeholder="或直接粘贴规则 JSONL 文本（每行一条规则 JSON，支持部分行错误提示）"></textarea>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn secondary" onclick="importRuleText()">导入粘贴的 JSONL</button>
+        </div>
+        <div id="import-issues" class="code" style="display:none;"></div>
+      </div>
+
+      <div class="card">
+        <h2>单条与批量构建（P-TASK-04..05）</h2>
+        <div class="row">
+          <input type="text" id="single-rule-id" value="B001" placeholder="rule_id" style="width:100px;" />
+          <input type="text" id="single-rule-ver" value="3.0" placeholder="rule_version" style="width:90px;" />
+          <input type="text" id="single-ver-name" placeholder="可选版本名（如 b001-v1）" />
+          <button class="btn" onclick="submitSingleBuild()">提交单条构建任务</button>
+        </div>
+        <div class="row">
+          <input type="text" id="bulk-ver-name" placeholder="批量构建版本名（如 baseline-62）" />
+          <button class="btn" onclick="submitBulkBuild()">提交全量 62 条批量构建</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>已导入规则列表（{{ rules|length }}）</h2>
+        <table>
+          <thead><tr><th>规则</th><th>标题</th><th>来源</th><th>SHA256</th></tr></thead>
+          <tbody>
+            {% for r in rules %}
+            <tr>
+              <td><strong>{{ r.rule_id }}@{{ r.rule_version }}</strong></td>
+              <td>{{ r.title }}</td>
+              <td class="muted">{{ r.source_file }}</td>
+              <td class="muted">{{ r.source_sha256[:12] }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="muted">尚未导入规则，点击上方“一键导入内置 62 条公开规则”即可开始。</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Tab 2: Audit & Annotate -->
+    <section id="tab-audit" class="panel">
+      <div class="card">
+        <h2>提交审核推理任务（P-TASK-06，绝不接受参考真值）</h2>
+        <div class="row">
+          <input type="text" id="audit-input-jsonl" placeholder="输入任务 JSONL 路径（input.jsonl）" style="min-width:340px;" />
+          <input type="text" id="audit-data-root" placeholder="材料根目录 data_root（留空默认同目录）" style="min-width:260px;" />
+          <input type="text" id="audit-version" placeholder="版本名（留空使用激活版本）" />
+          <button class="btn" onclick="submitAudit()">提交审核任务</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>提交证据与文字标注任务（P-TASK-06）</h2>
+        <div class="row">
+          <input type="text" id="ann-input-jsonl" placeholder="输入任务 JSONL 路径" style="min-width:260px;" />
+          <input type="text" id="ann-targets-jsonl" placeholder="目标字段 targets.jsonl 路径" style="min-width:260px;" />
+          <input type="text" id="ann-data-root" placeholder="材料根目录 data_root" style="min-width:220px;" />
+          <button class="btn" onclick="submitAnnotate()">提交标注任务</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 3: Results & Visual Evidence -->
+    <section id="tab-results" class="panel">
+      <div class="card">
+        <h2>审核与标注结果（P-TASK-07..08 / P-UX-02）</h2>
+        <table>
+          <thead><tr><th>Audit Unit</th><th>规则</th><th>Label</th><th>适用性</th><th>状态</th><th>版本</th><th>操作</th></tr></thead>
+          <tbody>
+            {% for res in results %}
+            <tr>
+              <td><code>{{ res.audit_unit_id }}</code></td>
+              <td>{{ res.rule_id }}@{{ res.rule_version }}</td>
+              <td><span class="badge {{ res.prediction.label or 'error' }}">{{ res.prediction.label or "null" }}</span></td>
+              <td>{{ res.prediction.applicability }}</td>
+              <td><span class="badge {{ res.prediction.execution_status }}">{{ res.prediction.execution_status }}</span></td>
+              <td class="muted">{{ res.artifact_version }}</td>
+              <td><button class="btn secondary" onclick="inspectResult('{{ res.result_id }}')">查看规则与视觉证据</button></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="muted">暂无审核结果。</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" id="result-detail-card" style="display:none;">
+        <h2>结果详情与证据回溯</h2>
+        <div class="split">
+          <div>
+            <h3>判定摘要与规则原文</h3>
+            <div id="detail-summary" class="code"></div>
+            <h3>冻结规则文本（来源追溯）</h3>
+            <div id="detail-rule-text" class="code"></div>
+          </div>
+          <div>
+            <h3>材料与规范化 BBox 叠加视图</h3>
+            <div id="detail-evidence-controls" class="row"></div>
+            <div id="detail-evidence-stage" class="evidence-stage" style="display:none;">
+              <img id="detail-evidence-img" alt="证据材料" />
+              <div id="detail-evidence-boxes"></div>
+            </div>
+            <div id="detail-evidence-meta" class="muted" style="margin-top:8px;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 4: Versions & Safe Iteration -->
+    <section id="tab-versions" class="panel">
+      <div class="card">
+        <h2>安全候选迭代（P-TASK-13：基线不可变，永不自动激活）</h2>
+        <div class="row">
+          <input type="text" id="iter-base-version" placeholder="基线版本名" />
+          <input type="text" id="iter-feedback" placeholder="反馈包 feedback.json 路径" style="min-width:260px;" />
+          <input type="text" id="iter-input" placeholder="修复样本 repair.jsonl 路径" style="min-width:260px;" />
+          <input type="text" id="iter-cand-name" placeholder="候选版本名（可选）" />
+          <button class="btn" onclick="submitIterate()">提交安全迭代</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>版本生命周期管理（P-TASK-14：激活 / 回滚 / 差异对比）</h2>
+        <table>
+          <thead><tr><th>版本名</th><th>Artifact Version</th><th>规则数</th><th>Root SHA256</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            {% for v in versions.versions %}
+            <tr>
+              <td><strong>{{ v.name }}</strong></td>
+              <td>{{ v.artifact_version }}</td>
+              <td>{{ v.rule_count if v.rule_count is not none else "-" }}</td>
+              <td class="muted">{{ v.root_sha256[:12] }}</td>
+              <td>
+                {% if versions.active == v.name %}
+                <span class="badge active">当前激活</span>
+                {% else %}
+                <span class="badge">候选/历史</span>
+                {% endif %}
+              </td>
+              <td>
+                <button class="btn secondary" onclick="activateVersion('{{ v.name }}')">激活</button>
+                <button class="btn secondary" onclick="rollbackVersion('{{ v.name }}')">回滚至此</button>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="muted">暂无已注册版本。</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Tab 5: Compare & Isolated Evaluation -->
+    <section id="tab-evaluate" class="panel">
+      <div class="card">
+        <h2>版本结果对比（P-TASK-09：开发集/无真值口径明确区分）</h2>
+        <div class="row">
+          <input type="text" id="cmp-base-job" placeholder="基线 Job ID" />
+          <input type="text" id="cmp-cand-job" placeholder="候选 Job ID" />
+          <input type="text" id="cmp-refs" placeholder="可选公开开发参考 JSONL 路径（留空仅展示差异）" style="min-width:300px;" />
+          <button class="btn" onclick="runCompare()">执行对比</button>
+        </div>
+        <div id="cmp-output" class="code" style="display:none;"></div>
+      </div>
+
+      <div class="card">
+        <h2>隔离评测插件管理（P-TASK-15：严格隔离于推理路径）</h2>
+        <table>
+          <thead><tr><th>Plugin ID</th><th>别名</th><th>描述</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            {% for p in plugins %}
+            <tr>
+              <td><code>{{ p.plugin_id }}</code></td>
+              <td class="muted">{{ p.aliases|join(", ") }}</td>
+              <td>{{ p.description }}</td>
+              <td><span class="badge {{ 'ok' if p.enabled else 'warn' }}">{{ '已启用' if p.enabled else '已禁用' }}</span></td>
+              <td>
+                <button class="btn secondary" onclick="togglePlugin('{{ p.plugin_id }}', {{ 'false' if p.enabled else 'true' }})">
+                  {{ '禁用' if p.enabled else '启用' }}
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <h3>运行隔离评测任务</h3>
+        <div class="row">
+          <input type="text" id="eval-inputs" placeholder="inputs.jsonl 路径" style="min-width:220px;" />
+          <input type="text" id="eval-outputs" placeholder="predictions.jsonl 路径" style="min-width:220px;" />
+          <input type="text" id="eval-refs" placeholder="公开开发 references.jsonl（可选）" style="min-width:220px;" />
+          <button class="btn" onclick="submitEvaluate()">运行隔离评测</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 6: Jobs Queue -->
+    <section id="tab-jobs" class="panel">
+      <div class="card">
+        <h2>持久化任务队列（P-TASK-10..12：重试 / 断点续跑 / 导出）</h2>
+        <table>
+          <thead><tr><th>Job ID</th><th>类型</th><th>状态</th><th>进度</th><th>版本</th><th>父任务</th><th>操作</th></tr></thead>
+          <tbody>
+            {% for j in jobs %}
+            <tr>
+              <td><code>{{ j.job_id }}</code></td>
+              <td>{{ j.job_kind }}</td>
+              <td><span class="badge {{ j.status }}">{{ j.status }}</span></td>
+              <td>{{ j.done_items }} / {{ j.total_items }} (错 {{ j.error_items }})</td>
+              <td class="muted">{{ j.artifact_version or "-" }}</td>
+              <td class="muted">{{ j.parent_job_id or "-" }}</td>
+              <td>
+                <button class="btn secondary" onclick="retryJob('{{ j.job_id }}')">重试(新任务)</button>
+                {% if j.status in ['interrupted', 'failed'] %}
+                <button class="btn secondary" onclick="resumeJob('{{ j.job_id }}')">断点续跑</button>
+                {% endif %}
+                <a class="btn secondary" href="/api/jobs/{{ j.job_id }}/export?fmt=jsonl" style="text-decoration:none;">导出JSONL</a>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="muted">暂无任务记录。</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const tabs = document.querySelectorAll('#tabs button');
+    tabs.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabs.forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      });
+    });
+
+    function showFlash(msg, isErr=false) {
+      const el = document.getElementById('flash');
+      el.style.display = 'block';
+      el.className = 'notice' + (isErr ? ' error' : '');
+      el.textContent = msg;
+    }
+
+    async function api(url, opts={}) {
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = typeof data.detail === 'object'
+          ? JSON.stringify(data.detail, null, 2)
+          : (data.detail || res.statusText);
+        showFlash('操作失败：' + msg, true);
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    async function importBundled62() {
+      const r = await api('/api/rules/import', { method: 'POST', body: JSON.stringify({ use_bundled_62: true }) });
+      showFlash(`导入完成：有效 ${r.valid_count} 条，唯一进阶规则 ${r.unique_advanced_rules} 条。`);
+      setTimeout(() => location.reload(), 600);
+    }
+
+    async function importRuleFile() {
+      const file_path = document.getElementById('rule-file-path').value.trim();
+      const r = await api('/api/rules/import', { method: 'POST', body: JSON.stringify({ file_path }) });
+      renderImportSummary(r);
+    }
+
+    async function importRuleText() {
+      const jsonl_text = document.getElementById('rule-jsonl-text').value;
+      const r = await api('/api/rules/import', { method: 'POST', body: JSON.stringify({ jsonl_text }) });
+      renderImportSummary(r);
+    }
+
+    function renderImportSummary(r) {
+      showFlash(`导入完成：有效 ${r.valid_count} 条，异常 ${r.issue_count} 条。`);
+      if (r.issues && r.issues.length) {
+        const box = document.getElementById('import-issues');
+        box.style.display = 'block';
+        box.textContent = JSON.stringify(r.issues, null, 2);
+      } else {
+        setTimeout(() => location.reload(), 600);
+      }
+    }
+
+    async function submitSingleBuild() {
+      const payload = {
+        rule_id: document.getElementById('single-rule-id').value.trim(),
+        rule_version: document.getElementById('single-rule-ver').value.trim(),
+        version_name: document.getElementById('single-ver-name').value.trim() || undefined
+      };
+      const job = await api('/api/builds/single', { method: 'POST', body: JSON.stringify(payload) });
+      showFlash(`单条构建任务已提交：${job.job_id}`);
+      setTimeout(() => location.reload(), 800);
+    }
+
+    async function submitBulkBuild() {
+      const payload = {
+        version_name: document.getElementById('bulk-ver-name').value.trim() || undefined
+      };
+      const job = await api('/api/builds/bulk', { method: 'POST', body: JSON.stringify(payload) });
+      showFlash(`全量构建任务已提交：${job.job_id}`);
+      setTimeout(() => location.reload(), 800);
+    }
+
+    async function submitAudit() {
+      const payload = {
+        input_jsonl: document.getElementById('audit-input-jsonl').value.trim(),
+        data_root: document.getElementById('audit-data-root').value.trim() || undefined,
+        version_name: document.getElementById('audit-version').value.trim() || undefined
+      };
+      const job = await api('/api/audit/run', { method: 'POST', body: JSON.stringify(payload) });
+      showFlash(`审核任务已提交：${job.job_id}`);
+      setTimeout(() => location.reload(), 800);
+    }
+
+    async function submitAnnotate() {
+      const payload = {
+        input_jsonl: document.getElementById('ann-input-jsonl').value.trim(),
+        targets_jsonl: document.getElementById('ann-targets-jsonl').value.trim(),
+        data_root: document.getElementById('ann-data-root').value.trim() || undefined
+      };
+      const job = await api('/api/annotate/run', { method: 'POST', body: JSON.stringify(payload) });
+      showFlash(`标注任务已提交：${job.job_id}`);
+      setTimeout(() => location.reload(), 800);
+    }
+
+    async function submitIterate() {
+      const payload = {
+        base_version_name: document.getElementById('iter-base-version').value.trim() || undefined,
+        feedback_path: document.getElementById('iter-feedback').value.trim(),
+        input_jsonl: document.getElementById('iter-input').value.trim(),
+        version_name: document.getElementById('iter-cand-name').value.trim() || undefined
+      };
+      const job = await api('/api/iterate', { method: 'POST', body: JSON.stringify(payload) });
+      showFlash(`安全迭代任务已提交：${job.job_id}`);
+      setTimeout(() => location.reload(), 800);
+    }
+
+    async function activateVersion(name) {
+      await api('/api/versions/activate', { method: 'POST', body: JSON.stringify({ name }) });
+      showFlash(`已激活版本：${name}`);
+      setTimeout(() => location.reload(), 500);
+    }
+
+    async function rollbackVersion(name) {
+      await api('/api/versions/rollback', { method: 'POST', body: JSON.stringify({ name }) });
+      showFlash(`已回滚至版本：${name}`);
+      setTimeout(() => location.reload(), 500);
+    }
+
+    async function togglePlugin(pid, enabled) {
+      await api(`/api/plugins/${encodeURIComponent(pid)}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) });
+      showFlash(`插件 ${pid} 已${enabled ? '启用' : '禁用'}`);
+      setTimeout(() => location.reload(), 500);
+    }
+
+    async function submitEvaluate() {
+      const payload = {
+        inputs_path: document.getElementById('eval-inputs').value.trim(),
+        outputs_path: document.getElementById('eval-outputs').value.trim(),
+        references_path: document.getElementById('eval-refs').value.trim() || undefined
+      };
+      const job = await api('/api/evaluate/run', { method: 'POST', body: JSON.stringify(payload) });
+      showFlash(`隔离评测任务已提交：${job.job_id}`);
+      setTimeout(() => location.reload(), 800);
+    }
+
+    async function runCompare() {
+      const payload = {
+        baseline_job_id: document.getElementById('cmp-base-job').value.trim(),
+        candidate_job_id: document.getElementById('cmp-cand-job').value.trim(),
+        references_path: document.getElementById('cmp-refs').value.trim() || undefined
+      };
+      const comp = await api('/api/compare', { method: 'POST', body: JSON.stringify(payload) });
+      const box = document.getElementById('cmp-output');
+      box.style.display = 'block';
+      box.textContent = JSON.stringify(comp, null, 2);
+    }
+
+    async function retryJob(jobId) {
+      const job = await api(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' });
+      showFlash(`已创建重试任务 ${job.job_id}（原任务 ${jobId} 完整保留）`);
+      setTimeout(() => location.reload(), 700);
+    }
+
+    async function resumeJob(jobId) {
+      const job = await api(`/api/jobs/${encodeURIComponent(jobId)}/resume`, { method: 'POST' });
+      showFlash(`已提交断点续跑：${job.job_id}`);
+      setTimeout(() => location.reload(), 700);
+    }
+
+    async function inspectResult(resultId) {
+      const data = await api(`/api/results/${encodeURIComponent(resultId)}`);
+      document.getElementById('result-detail-card').style.display = 'block';
+      document.getElementById('detail-summary').textContent = JSON.stringify(data.prediction, null, 2);
+      document.getElementById('detail-rule-text').textContent =
+        `[${data.rule_trace.source}] ${data.rule_trace.rule_id}@${data.rule_trace.rule_version} ${data.rule_trace.title}\n\n` +
+        (data.rule_trace.raw_rule_text || '(无规则文本)');
+
+      const controls = document.getElementById('detail-evidence-controls');
+      controls.innerHTML = '';
+      const mats = (data.task && data.task.materials) || [];
+      const evRefs = (data.prediction && data.prediction.evidence_refs) || [];
+      mats.forEach(m => {
+        const b = document.createElement('button');
+        b.className = 'btn secondary';
+        b.textContent = `${m.material_id} (${m.role || m.media_type})`;
+        b.onclick = () => showMaterial(resultId, m, evRefs);
+        controls.appendChild(b);
+      });
+      if (mats.length) showMaterial(resultId, mats[0], evRefs);
+    }
+
+    function showMaterial(resultId, mat, evRefs) {
+      const stage = document.getElementById('detail-evidence-stage');
+      const img = document.getElementById('detail-evidence-img');
+      const boxes = document.getElementById('detail-evidence-boxes');
+      const meta = document.getElementById('detail-evidence-meta');
+      stage.style.display = 'inline-block';
+      boxes.innerHTML = '';
+      img.src = `/api/materials/${encodeURIComponent(resultId)}/${encodeURIComponent(mat.material_id)}`;
+      const matched = evRefs.filter(e => e.material_id === mat.material_id && Array.isArray(e.bbox) && e.bbox.length === 4);
+      matched.forEach((e, idx) => {
+        const [x1, y1, x2, y2] = e.bbox;
+        const div = document.createElement('div');
+        div.className = 'bbox-overlay';
+        div.style.left = (x1 * 100) + '%';
+        div.style.top = (y1 * 100) + '%';
+        div.style.width = ((x2 - x1) * 100) + '%';
+        div.style.height = ((y2 - y1) * 100) + '%';
+        const lbl = document.createElement('div');
+        lbl.className = 'bbox-label';
+        lbl.textContent = `#${idx + 1} ${e.role || e.material_id}`;
+        div.appendChild(lbl);
+        boxes.appendChild(div);
+      });
+      meta.textContent = `材料 ${mat.material_id} | page_index=${mat.page_index ?? 0} | 匹配证据框 ${matched.length} 个`;
+    }
+  </script>
+</body>
+</html>

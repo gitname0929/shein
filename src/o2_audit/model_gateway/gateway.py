@@ -208,6 +208,7 @@ class ZCodeObservationGateway:
 
         target_preds: tuple[str, ...] = ()
         rule_text = ""
+        extraction_guidance: tuple[str, ...] = ()
         if self._plan is not None:
             raw_preds = tuple(getattr(self._plan, "required_predicates", ()) or ())
             # Scope B001/certificate vs label predicates cleanly by entity kind
@@ -234,6 +235,9 @@ class ZCodeObservationGateway:
             if raw_text:
                 first_line = next((ln.strip() for ln in raw_text.splitlines() if ln.strip()), "")
                 rule_text = first_line[:160]
+            extraction_guidance = tuple(
+                getattr(self._plan, "extraction_guidance", ()) or ()
+            )
 
         system = observation_system_prompt()
         user_prompt = build_observation_prompt(
@@ -241,12 +245,14 @@ class ZCodeObservationGateway:
             target_predicates=target_preds,
             rule_text=rule_text,
             existing_entities=self._existing_entities,
+            extraction_guidance=extraction_guidance,
         )
         prompt_hash = prompt_fingerprint(
             request, materials, system,
             target_predicates=target_preds,
             rule_text=rule_text,
             existing_entities=self._existing_entities,
+            extraction_guidance=extraction_guidance,
         )
         # Crops and content hashes in the cache key include page_index so
         # multi-page PDFs with identical file bytes never collide across pages.

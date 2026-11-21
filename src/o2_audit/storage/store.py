@@ -133,6 +133,111 @@ CREATE TABLE IF NOT EXISTS extraction_cache (
     payload_json TEXT NOT NULL,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Stage 05: persistent product objects (rules, jobs, items, attempts, results,
+-- evaluation runs, and plugin configs). All live outside frozen artifacts.
+CREATE TABLE IF NOT EXISTS imported_rules (
+    rule_id        TEXT NOT NULL,
+    rule_version   TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    body           TEXT NOT NULL,
+    source_file    TEXT NOT NULL,
+    source_sha256  TEXT NOT NULL,
+    rule_family_id TEXT NOT NULL DEFAULT '',
+    raw_json       TEXT NOT NULL,
+    imported_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (rule_id, rule_version)
+);
+
+CREATE TABLE IF NOT EXISTS rule_import_batches (
+    batch_id        TEXT PRIMARY KEY,
+    source_name     TEXT NOT NULL,
+    total_lines     INTEGER NOT NULL,
+    valid_count     INTEGER NOT NULL,
+    unique_count    INTEGER NOT NULL,
+    duplicate_count INTEGER NOT NULL,
+    issue_count     INTEGER NOT NULL,
+    issues_json     TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id               TEXT PRIMARY KEY,
+    job_kind             TEXT NOT NULL,
+    status               TEXT NOT NULL,
+    idempotency_key      TEXT,
+    payload_json         TEXT NOT NULL,
+    result_json          TEXT,
+    error_json           TEXT,
+    artifact_version     TEXT,
+    artifact_root_sha256 TEXT,
+    parent_job_id        TEXT,
+    attempt_count        INTEGER NOT NULL DEFAULT 0,
+    created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_idem ON jobs(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+CREATE TABLE IF NOT EXISTS job_items (
+    job_id          TEXT NOT NULL REFERENCES jobs(job_id),
+    item_key        TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    artifact_version TEXT,
+    artifact_sha256 TEXT,
+    result_json     TEXT,
+    error_json      TEXT,
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (job_id, item_key)
+);
+
+CREATE TABLE IF NOT EXISTS job_attempts (
+    attempt_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL REFERENCES jobs(job_id),
+    attempt_no  INTEGER NOT NULL,
+    status      TEXT NOT NULL,
+    detail_json TEXT,
+    started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_results (
+    result_id            TEXT PRIMARY KEY,
+    job_id               TEXT NOT NULL,
+    run_id               TEXT NOT NULL,
+    audit_unit_id        TEXT NOT NULL,
+    rule_id              TEXT NOT NULL,
+    rule_version         TEXT NOT NULL,
+    artifact_version     TEXT NOT NULL,
+    artifact_root_sha256 TEXT NOT NULL,
+    data_root            TEXT NOT NULL,
+    out_path             TEXT NOT NULL,
+    task_json            TEXT NOT NULL,
+    prediction_json      TEXT NOT NULL,
+    created_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_results_job ON audit_results(job_id);
+CREATE INDEX IF NOT EXISTS idx_audit_results_unit ON audit_results(audit_unit_id);
+
+CREATE TABLE IF NOT EXISTS eval_runs (
+    eval_id         TEXT PRIMARY KEY,
+    plugin_id       TEXT NOT NULL,
+    plugin_version  TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    inputs_path     TEXT NOT NULL,
+    outputs_path    TEXT NOT NULL,
+    references_path TEXT,
+    report_json     TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS plugin_configs (
+    plugin_id   TEXT PRIMARY KEY,
+    config_json TEXT NOT NULL,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -143,7 +248,9 @@ class TaskStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(self.db_path), isolation_level=None)
+        self._conn = sqlite3.connect(
+            str(self.db_path), isolation_level=None, check_same_thread=False
+        )
         self._conn.row_factory = sqlite3.Row
         # executescript() manages its own commit; do not wrap it in a manual
         # transaction (BEGIN IMMEDIATE + COMMIT would conflict).
@@ -544,6 +651,481 @@ class TaskStore:
             {"event": r["event"],
              "detail": json.loads(r["detail_json"]) if r["detail_json"] else None,
              "created_at": r["created_at"]}
+            for r in rows
+        ]
+
+    # -- Stage 05: persistent rules, jobs, results, eval runs, plugins --------
+
+    def upsert_imported_rule(
+        self,
+        *,
+        rule_id: str,
+        rule_version: str,
+        title: str,
+        body: str,
+        source_file: str,
+        source_sha256: str,
+        rule_family_id: str,
+        raw_row: dict[str, Any],
+    ) -> bool:
+        """Insert or update an imported rule; returns True if newly inserted."""
+        with self._transaction() as cur:
+            existed = cur.execute(
+                "SELECT 1 FROM imported_rules WHERE rule_id=? AND rule_version=?",
+                (rule_id, rule_version),
+            ).fetchone()
+            cur.execute(
+                "INSERT INTO imported_rules(rule_id, rule_version, title, body,"
+                " source_file, source_sha256, rule_family_id, raw_json)"
+                " VALUES(?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(rule_id, rule_version) DO UPDATE SET"
+                " title=excluded.title, body=excluded.body, source_file=excluded.source_file,"
+                " source_sha256=excluded.source_sha256, rule_family_id=excluded.rule_family_id,"
+                " raw_json=excluded.raw_json, imported_at=datetime('now')",
+                (
+                    rule_id, rule_version, title, body, source_file,
+                    source_sha256, rule_family_id, json.dumps(raw_row, ensure_ascii=False),
+                ),
+            )
+            return existed is None
+
+    def list_imported_rules(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT rule_id, rule_version, title, body, source_file, source_sha256,"
+                " rule_family_id, raw_json, imported_at"
+                " FROM imported_rules ORDER BY rule_id, rule_version"
+            ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["raw_row"] = json.loads(d.pop("raw_json"))
+            out.append(d)
+        return out
+
+    def get_imported_rule(self, rule_id: str, rule_version: str) -> dict[str, Any] | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT rule_id, rule_version, title, body, source_file, source_sha256,"
+                " rule_family_id, raw_json, imported_at"
+                " FROM imported_rules WHERE rule_id=? AND rule_version=?",
+                (rule_id, rule_version),
+            ).fetchone()
+        if r is None:
+            return None
+        d = dict(r)
+        d["raw_row"] = json.loads(d.pop("raw_json"))
+        return d
+
+    def record_rule_import_batch(
+        self,
+        *,
+        batch_id: str,
+        source_name: str,
+        total_lines: int,
+        valid_count: int,
+        unique_count: int,
+        duplicate_count: int,
+        issues: list[dict[str, Any]],
+    ) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO rule_import_batches(batch_id, source_name, total_lines,"
+                " valid_count, unique_count, duplicate_count, issue_count, issues_json)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    batch_id, source_name, total_lines, valid_count,
+                    unique_count, duplicate_count, len(issues),
+                    json.dumps(issues, ensure_ascii=False),
+                ),
+            )
+
+    def list_rule_import_batches(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT batch_id, source_name, total_lines, valid_count, unique_count,"
+                " duplicate_count, issue_count, issues_json, created_at"
+                " FROM rule_import_batches ORDER BY rowid DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "batch_id": r["batch_id"],
+                "source_name": r["source_name"],
+                "total_lines": r["total_lines"],
+                "valid_count": r["valid_count"],
+                "unique_count": r["unique_count"],
+                "duplicate_count": r["duplicate_count"],
+                "issue_count": r["issue_count"],
+                "issues": json.loads(r["issues_json"]),
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    # -- jobs / items / attempts ----------------------------------------------
+
+    def create_job(
+        self,
+        *,
+        job_id: str,
+        job_kind: str,
+        payload: dict[str, Any],
+        idempotency_key: str | None = None,
+        artifact_version: str | None = None,
+        artifact_root_sha256: str | None = None,
+        parent_job_id: str | None = None,
+        status: str = "queued",
+    ) -> dict[str, Any]:
+        with self._transaction() as cur:
+            if idempotency_key:
+                existing = cur.execute(
+                    "SELECT * FROM jobs WHERE idempotency_key=? AND status NOT IN ('failed','cancelled')"
+                    " ORDER BY rowid DESC LIMIT 1",
+                    (idempotency_key,),
+                ).fetchone()
+                if existing is not None:
+                    return self._decode_job(existing)
+            cur.execute(
+                "INSERT INTO jobs(job_id, job_kind, status, idempotency_key, payload_json,"
+                " artifact_version, artifact_root_sha256, parent_job_id, attempt_count)"
+                " VALUES(?,?,?,?,?,?,?,?,0)",
+                (
+                    job_id, job_kind, status, idempotency_key,
+                    json.dumps(payload, ensure_ascii=False),
+                    artifact_version, artifact_root_sha256, parent_job_id,
+                ),
+            )
+            row = cur.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+            return self._decode_job(row)
+
+    @staticmethod
+    def _decode_job(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "job_id": row["job_id"],
+            "job_kind": row["job_kind"],
+            "status": row["status"],
+            "idempotency_key": row["idempotency_key"],
+            "payload": json.loads(row["payload_json"]),
+            "result": json.loads(row["result_json"]) if row["result_json"] else None,
+            "error": json.loads(row["error_json"]) if row["error_json"] else None,
+            "artifact_version": row["artifact_version"],
+            "artifact_root_sha256": row["artifact_root_sha256"],
+            "parent_job_id": row["parent_job_id"],
+            "attempt_count": row["attempt_count"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "finished_at": row["finished_at"],
+        }
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+        return self._decode_job(row) if row else None
+
+    def list_jobs(self, *, job_kind: str | None = None, status: str | None = None,
+                  limit: int = 100) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if job_kind:
+            clauses.append("job_kind=?")
+            params.append(job_kind)
+        if status:
+            clauses.append("status=?")
+            params.append(status)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM jobs{where} ORDER BY rowid DESC LIMIT ?", params
+            ).fetchall()
+        return [self._decode_job(r) for r in rows]
+
+    def update_job_status(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+        artifact_version: str | None = None,
+        artifact_root_sha256: str | None = None,
+        increment_attempt: bool = False,
+        finished: bool = False,
+    ) -> None:
+        with self._transaction() as cur:
+            sets = ["status=?", "updated_at=datetime('now')"]
+            params: list[Any] = [status]
+            if result is not None:
+                sets.append("result_json=?")
+                params.append(json.dumps(result, ensure_ascii=False))
+            if error is not None:
+                sets.append("error_json=?")
+                params.append(json.dumps(error, ensure_ascii=False))
+            elif status in ("queued", "running", "completed"):
+                sets.append("error_json=NULL")
+            if artifact_version is not None:
+                sets.append("artifact_version=?")
+                params.append(artifact_version)
+            if artifact_root_sha256 is not None:
+                sets.append("artifact_root_sha256=?")
+                params.append(artifact_root_sha256)
+            if increment_attempt:
+                sets.append("attempt_count=attempt_count+1")
+            if finished:
+                sets.append("finished_at=datetime('now')")
+            params.append(job_id)
+            cur.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE job_id=?", params)
+
+    def mark_running_jobs_interrupted(self) -> list[str]:
+        """On startup/restart, transition stale 'running' jobs to 'interrupted'."""
+        with self._transaction() as cur:
+            rows = cur.execute(
+                "SELECT job_id FROM jobs WHERE status='running'"
+            ).fetchall()
+            ids = [r["job_id"] for r in rows]
+            if ids:
+                cur.execute(
+                    "UPDATE jobs SET status='interrupted', updated_at=datetime('now'),"
+                    " error_json=? WHERE status='running'",
+                    (json.dumps({
+                        "code": "process_interrupted",
+                        "message": "worker process stopped while job was running; safe to resume",
+                        "next_action": "resume_job",
+                    }, ensure_ascii=False),),
+                )
+            return ids
+
+    def record_job_attempt(self, job_id: str, attempt_no: int, status: str,
+                           detail: dict[str, Any] | None = None,
+                           finished: bool = False) -> int:
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO job_attempts(job_id, attempt_no, status, detail_json, finished_at)"
+                " VALUES(?,?,?,?, CASE WHEN ? THEN datetime('now') ELSE NULL END)",
+                (
+                    job_id, attempt_no, status,
+                    json.dumps(detail, ensure_ascii=False) if detail is not None else None,
+                    1 if finished else 0,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def list_job_attempts(self, job_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT attempt_id, job_id, attempt_no, status, detail_json, started_at, finished_at"
+                " FROM job_attempts WHERE job_id=? ORDER BY attempt_id",
+                (job_id,),
+            ).fetchall()
+        return [
+            {
+                "attempt_id": r["attempt_id"],
+                "job_id": r["job_id"],
+                "attempt_no": r["attempt_no"],
+                "status": r["status"],
+                "detail": json.loads(r["detail_json"]) if r["detail_json"] else None,
+                "started_at": r["started_at"],
+                "finished_at": r["finished_at"],
+            }
+            for r in rows
+        ]
+
+    def upsert_job_item(
+        self,
+        job_id: str,
+        item_key: str,
+        status: str,
+        *,
+        artifact_version: str | None = None,
+        artifact_sha256: str | None = None,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO job_items(job_id, item_key, status, artifact_version,"
+                " artifact_sha256, result_json, error_json)"
+                " VALUES(?,?,?,?,?,?,?)"
+                " ON CONFLICT(job_id, item_key) DO UPDATE SET"
+                " status=excluded.status, artifact_version=excluded.artifact_version,"
+                " artifact_sha256=excluded.artifact_sha256, result_json=excluded.result_json,"
+                " error_json=excluded.error_json, updated_at=datetime('now')",
+                (
+                    job_id, item_key, status, artifact_version, artifact_sha256,
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    json.dumps(error, ensure_ascii=False) if error is not None else None,
+                ),
+            )
+
+    def list_job_items(self, job_id: str, *, status: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            if status:
+                rows = self._conn.execute(
+                    "SELECT * FROM job_items WHERE job_id=? AND status=? ORDER BY item_key",
+                    (job_id, status),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM job_items WHERE job_id=? ORDER BY item_key",
+                    (job_id,),
+                ).fetchall()
+        return [
+            {
+                "job_id": r["job_id"],
+                "item_key": r["item_key"],
+                "status": r["status"],
+                "artifact_version": r["artifact_version"],
+                "artifact_sha256": r["artifact_sha256"],
+                "result": json.loads(r["result_json"]) if r["result_json"] else None,
+                "error": json.loads(r["error_json"]) if r["error_json"] else None,
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+
+    # -- audit results --------------------------------------------------------
+
+    def record_audit_result(
+        self,
+        *,
+        result_id: str,
+        job_id: str,
+        run_id: str,
+        audit_unit_id: str,
+        rule_id: str,
+        rule_version: str,
+        artifact_version: str,
+        artifact_root_sha256: str,
+        data_root: str,
+        out_path: str,
+        task: dict[str, Any],
+        prediction: dict[str, Any],
+    ) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO audit_results(result_id, job_id, run_id, audit_unit_id,"
+                " rule_id, rule_version, artifact_version, artifact_root_sha256,"
+                " data_root, out_path, task_json, prediction_json)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(result_id) DO UPDATE SET"
+                " prediction_json=excluded.prediction_json",
+                (
+                    result_id, job_id, run_id, audit_unit_id, rule_id, rule_version,
+                    artifact_version, artifact_root_sha256, data_root, out_path,
+                    json.dumps(task, ensure_ascii=False),
+                    json.dumps(prediction, ensure_ascii=False),
+                ),
+            )
+
+    @staticmethod
+    def _decode_audit_result(r: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "result_id": r["result_id"],
+            "job_id": r["job_id"],
+            "run_id": r["run_id"],
+            "audit_unit_id": r["audit_unit_id"],
+            "rule_id": r["rule_id"],
+            "rule_version": r["rule_version"],
+            "artifact_version": r["artifact_version"],
+            "artifact_root_sha256": r["artifact_root_sha256"],
+            "data_root": r["data_root"],
+            "out_path": r["out_path"],
+            "task": json.loads(r["task_json"]),
+            "prediction": json.loads(r["prediction_json"]),
+            "created_at": r["created_at"],
+        }
+
+    def get_audit_result(self, result_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM audit_results WHERE result_id=?", (result_id,)
+            ).fetchone()
+        return self._decode_audit_result(row) if row else None
+
+    def list_audit_results(self, *, job_id: str | None = None,
+                           limit: int = 200) -> list[dict[str, Any]]:
+        with self._lock:
+            if job_id:
+                rows = self._conn.execute(
+                    "SELECT * FROM audit_results WHERE job_id=? ORDER BY rowid ASC LIMIT ?",
+                    (job_id, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM audit_results ORDER BY rowid DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [self._decode_audit_result(r) for r in rows]
+
+    # -- evaluation runs & plugin configs -------------------------------------
+
+    def record_eval_run(
+        self,
+        *,
+        eval_id: str,
+        plugin_id: str,
+        plugin_version: str,
+        status: str,
+        inputs_path: str,
+        outputs_path: str,
+        references_path: str | None,
+        report: dict[str, Any],
+    ) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO eval_runs(eval_id, plugin_id, plugin_version, status,"
+                " inputs_path, outputs_path, references_path, report_json)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    eval_id, plugin_id, plugin_version, status, inputs_path,
+                    outputs_path, references_path, json.dumps(report, ensure_ascii=False),
+                ),
+            )
+
+    def list_eval_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM eval_runs ORDER BY rowid DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [
+            {
+                "eval_id": r["eval_id"],
+                "plugin_id": r["plugin_id"],
+                "plugin_version": r["plugin_version"],
+                "status": r["status"],
+                "inputs_path": r["inputs_path"],
+                "outputs_path": r["outputs_path"],
+                "references_path": r["references_path"],
+                "report": json.loads(r["report_json"]),
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def upsert_plugin_config(self, plugin_id: str, config: dict[str, Any], enabled: bool) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO plugin_configs(plugin_id, config_json, enabled)"
+                " VALUES(?,?,?)"
+                " ON CONFLICT(plugin_id) DO UPDATE SET"
+                " config_json=excluded.config_json, enabled=excluded.enabled,"
+                " updated_at=datetime('now')",
+                (plugin_id, json.dumps(config, ensure_ascii=False), 1 if enabled else 0),
+            )
+
+    def list_plugin_configs(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT plugin_id, config_json, enabled, updated_at FROM plugin_configs ORDER BY plugin_id"
+            ).fetchall()
+        return [
+            {
+                "plugin_id": r["plugin_id"],
+                "config": json.loads(r["config_json"]),
+                "enabled": bool(r["enabled"]),
+                "updated_at": r["updated_at"],
+            }
             for r in rows
         ]
 

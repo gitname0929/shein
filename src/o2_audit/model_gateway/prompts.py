@@ -151,6 +151,7 @@ def build_observation_prompt(
     target_predicates: Iterable[str] = (),
     rule_text: str = "",
     existing_entities: Iterable[tuple[str, str]] = (),
+    extraction_guidance: Iterable[str] = (),
 ) -> str:
     """User prompt requesting observations for one ``NeedEvidence`` gap.
 
@@ -176,6 +177,12 @@ def build_observation_prompt(
     if rule_text:
         extra_sections.append(
             f"本次检查涉及的事实范围（仅用于确定需观察哪些视觉细节，绝不输出合规结论）：\n{rule_text}"
+        )
+    guidance_list = [str(g).strip() for g in extraction_guidance if str(g).strip()]
+    if guidance_list:
+        extra_sections.append(
+            "本规则版本的观察与提取澄清提示（仅辅助定位/辨认视觉事实，不改变判定口径）：\n"
+            + "\n".join(f"  - {g}" for g in guidance_list)
         )
     existing = list(existing_entities)
     if existing:
@@ -209,6 +216,7 @@ def prompt_fingerprint(
     target_predicates: Iterable[str] = (),
     rule_text: str = "",
     existing_entities: Iterable[tuple[str, str]] = (),
+    extraction_guidance: Iterable[str] = (),
 ) -> str:
     """Content-addressed fingerprint of the prompt STRUCTURE (no material IDs,
     no image bytes) — used as part of the extraction cache key together with
@@ -225,6 +233,9 @@ def prompt_fingerprint(
         payload["target_predicates"] = preds
     if rule_text:
         payload["rule_text_sha256"] = hashlib.sha256(rule_text.encode("utf-8")).hexdigest()
+    guidance_list = [str(g).strip() for g in extraction_guidance if str(g).strip()]
+    if guidance_list:
+        payload["extraction_guidance"] = guidance_list
     existing = sorted((str(eid), str(kind)) for eid, kind in existing_entities)
     if existing:
         payload["existing_entities"] = existing

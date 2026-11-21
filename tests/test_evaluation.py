@@ -623,7 +623,7 @@ class TestVersionComparisonAndGate:
 class TestStructureIsolationAndCLI:
     def test_l_struct_04_production_modules_never_import_evaluation(self):
         src_root = Path(__file__).resolve().parent.parent / "src" / "o2_audit"
-        forbidden_dirs = ("build", "domain", "materials", "model_gateway", "operators", "protocol", "rules", "runtime", "storage")
+        forbidden_dirs = ("build", "domain", "iterate", "materials", "model_gateway", "operators", "protocol", "rules", "runtime", "storage")
         violations: list[str] = []
         for d in forbidden_dirs:
             folder = src_root / d

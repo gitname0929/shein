@@ -556,15 +556,17 @@ def test_cli_build_status_activate_rollback(tmp_path: Path, capsys,
     assert cli_main(["--workspace", str(ws), "activate", "--name", "nope"]) == 1
 
 
-def test_cli_reserved_commands_exit_nonzero(tmp_path: Path):
-    # infer/annotate (Stage 03b) and evaluate (Stage 04) are implemented;
-    # iterate stays reserved until Stage 05 (never fake exit 0).
-    for argv in (
-        ["iterate", "--base", "art", "--feedback", "fb.json", "--input", "in.jsonl",
-         "--out", "cand"],
-    ):
-        assert cli_main(argv) != 0  # NEVER fake exit 0
+def test_cli_invalid_iterate_exits_nonzero_without_writing_out(tmp_path: Path):
+    # All five protocol 1.3.1 commands (build/infer/annotate/iterate/evaluate)
+    # are implemented; invalid iterate inputs fail non-zero and never write out.
     out_dir = tmp_path / "never_written"
+    rc = cli_main([
+        "iterate", "--base", str(tmp_path / "missing_base"),
+        "--feedback", str(tmp_path / "missing_fb.json"),
+        "--input", str(tmp_path / "missing_in.jsonl"),
+        "--out", str(out_dir),
+    ])
+    assert rc != 0
     assert not out_dir.exists()
 
 

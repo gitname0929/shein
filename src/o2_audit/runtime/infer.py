@@ -263,9 +263,8 @@ class UnitExecution:
 
     @property
     def artifact_version(self) -> str:
-        versions = {e["artifact_version"] for e in self.artifact.entries}
-        assert len(versions) == 1
-        return versions.pop()
+        versions = sorted({e["artifact_version"] for e in self.artifact.entries})
+        return versions[0] if len(versions) == 1 else versions[-1]
 
 
 def execute_units(

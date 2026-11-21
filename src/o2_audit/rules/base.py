@@ -100,6 +100,10 @@ class RulePlan(BaseModel):
     # reason_code -> (entity_kind, predicate, candidate roles) evidence-gap
     # hints used by the controller's NeedEvidence loop for this plan.
     gap_hints: dict[str, tuple[str, str, tuple[str, ...]]] = Field(default_factory=dict)
+    # Bounded, source-consistent extraction clarifications added via safe
+    # iteration (never alters normative rule semantics; loaded by ModelGateway
+    # and included in prompt_fingerprint so cache never mixes versions).
+    extraction_guidance: tuple[str, ...] = Field(default_factory=tuple)
 
     def quote(self, key: str) -> str | None:
         return self.quotes.get(key)
