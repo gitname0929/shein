@@ -120,7 +120,38 @@ def _materials_block(materials: Iterable[Any]) -> str:
     return "\n".join(lines)
 
 
-def build_observation_prompt(gap: Any, materials: Iterable[Any]) -> str:
+_PREDICATE_FORMAT_HINTS: dict[str, str] = {
+    "carrier": 'carrier: "outer_package" | "attached_tag" | "inner_package" | "product_body" | "other"',
+    "void_marked": "void_marked: 布尔值 true（存在清晰作废/VOID标记）或 false（清晰完整范围内确认无作废标记）",
+    "attached_to_package": "attached_to_package: 布尔值 true（清晰可见挂签/附签物理连接到包装/产品）或 false",
+    "covered_models": 'covered_models: 字符串数组，如 ["EDU-753"]（按证明原样逐项列出）',
+    "valid_from": 'valid_from: 日期字符串 "YYYY-MM-DD"',
+    "valid_until": 'valid_until: 日期字符串 "YYYY-MM-DD"',
+    "issue_date": 'issue_date: 日期字符串 "YYYY-MM-DD"',
+    "withdrawal_date": 'withdrawal_date: 日期字符串 "YYYY-MM-DD"（若清晰完整范围内无撤回日期用 confirmed_missing 且 scope_complete=true）',
+    "component_model_map": 'component_model_map: JSON 对象 {"component_id": "型号"}，严格保持行列配对',
+    "model_spec_map": 'model_spec_map: JSON 对象 {"型号": "规格"}，严格保持行列配对',
+    "language_text": 'language_text: 字符串数组，列出材料上可见的各语言完整警示/声明句子',
+    "verbatim_text": "verbatim_text: 逐字转写的完整文本字符串（保留原大小写与标点）",
+    "shape_type": 'shape_type: "circle" | "square" | "triangle" | "star" | "dot" 等形状英文名',
+    "is_filled": "is_filled: 布尔值 true（实心）或 false（空心）",
+    "is_closed": "is_closed: 布尔值 true（轮廓闭合）或 false（有缺口）",
+    "relative_position": 'relative_position: "upper_half" | "lower_half" | "on_midline" | "left_of" | "right_of" | "above" | "below" | "adjacent" | "inside" | "outside"',
+    "box_color": 'box_color: 颜色名称字符串（如 "蓝色" / "白色" / "红色"）',
+    "interior_obstructed": "interior_obstructed: 布尔值 true（文字/字段内部被遮挡）或 false（清晰无遮挡）",
+    "boundary_visible": "boundary_visible: 布尔值 true（主面四条边界完整可见）或 false",
+    "printed_page_number": "printed_page_number: 整数（文件内印刷页码，不是源文件 page_index）",
+}
+
+
+def build_observation_prompt(
+    gap: Any,
+    materials: Iterable[Any],
+    *,
+    target_predicates: Iterable[str] = (),
+    rule_text: str = "",
+    existing_entities: Iterable[tuple[str, str]] = (),
+) -> str:
     """User prompt requesting observations for one ``NeedEvidence`` gap.
 
     Material IDs appear so the model can cite provenance; they are excluded
@@ -128,33 +159,75 @@ def build_observation_prompt(gap: Any, materials: Iterable[Any]) -> str:
     content-addressed across audit units.
     """
     mats = list(materials)
+    preds: list[str] = []
+    for p in (gap.predicate, *target_predicates):
+        if p in KNOWN_PREDICATES and p not in preds:
+            preds.append(p)
+    extra_sections: list[str] = []
+    if len(preds) > 1:
+        extra_sections.append(
+            f"- 建议同轮对每个可见物理实体一并提取的谓词：{', '.join(preds)}"
+        )
+    hints = [_PREDICATE_FORMAT_HINTS[p] for p in preds if p in _PREDICATE_FORMAT_HINTS]
+    if hints:
+        extra_sections.append(
+            "字段值格式说明：\n" + "\n".join(f"  * {h}" for h in hints)
+        )
+    if rule_text:
+        extra_sections.append(
+            f"本次检查涉及的事实范围（仅用于确定需观察哪些视觉细节，绝不输出合规结论）：\n{rule_text}"
+        )
+    existing = list(existing_entities)
+    if existing:
+        ent_list = ", ".join(f"{eid}({kind})" for eid, kind in existing)
+        extra_sections.append(
+            f"本审核单元此前已建立的实体（若指向同一物理对象，必须复用相同的 entity_id）：{ent_list}"
+        )
+    extra_block = ("\n" + "\n\n".join(extra_sections) + "\n") if extra_sections else ""
     return (
         "需要检查的材料（material_id 供你在 source 中引用；page_index 为源文件页序号）：\n"
         f"{_materials_block(mats)}\n\n"
         f"本次观察目标：\n"
         f"- 实体类型(kind)：{gap.entity_kind.value}\n"
-        f"- 谓词(predicate)：{gap.predicate}\n"
-        f"- 检查原因：{gap.reason}\n\n"
-        "请仔细查看上面每张图片，针对目标谓词输出观察。"
-        "同一张图片上的每个独立物理对象都要单独建立实体并分别报告观察。"
-        "如果该谓词在完整清晰的检查范围内确实不存在，才可使用"
-        " confirmed_missing 且 scope_complete=true；范围不完整用 incomplete_scope；"
-        "存在但读不清用 unreadable。"
+        f"- 主目标谓词(predicate)：{gap.predicate}\n"
+        f"- 检查原因：{gap.reason}\n"
+        f"{extra_block}\n"
+        "请仔细查看上面每张图片，针对目标谓词（以及上面列出的同实体相关谓词）输出完整观察。"
+        "同一张图片上的每个独立物理对象都要单独建立实体，并在同一个 entity_id 下一次性报告其全部可见谓词。"
+        "如果某个谓词在完整清晰的检查范围内确实不存在（例如清晰完整的标签/证明上确认没有作废标记），"
+        "请报告 status=confirmed_missing 且 scope_complete=true（或布尔谓词报告 readable 且 raw_value=false 且 scope_complete=true）；"
+        "范围不完整用 incomplete_scope；存在但读不清用 unreadable。"
         "只输出规定的 JSON 对象。"
     )
 
 
-def prompt_fingerprint(gap: Any, materials: Iterable[Any], system_prompt: str) -> str:
+def prompt_fingerprint(
+    gap: Any,
+    materials: Iterable[Any],
+    system_prompt: str,
+    *,
+    target_predicates: Iterable[str] = (),
+    rule_text: str = "",
+    existing_entities: Iterable[tuple[str, str]] = (),
+) -> str:
     """Content-addressed fingerprint of the prompt STRUCTURE (no material IDs,
     no image bytes) — used as part of the extraction cache key together with
     the materials' content hashes."""
-    payload = {
+    payload: dict[str, Any] = {
         "system": hashlib.sha256(system_prompt.encode("utf-8")).hexdigest(),
         "entity_kind": gap.entity_kind.value,
         "predicate": gap.predicate,
         "reason": gap.reason,
         "slots": material_slot_descriptions(materials),
     }
+    preds = sorted({p for p in target_predicates if p in KNOWN_PREDICATES})
+    if preds:
+        payload["target_predicates"] = preds
+    if rule_text:
+        payload["rule_text_sha256"] = hashlib.sha256(rule_text.encode("utf-8")).hexdigest()
+    existing = sorted((str(eid), str(kind)) for eid, kind in existing_entities)
+    if existing:
+        payload["existing_entities"] = existing
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True,
                    separators=(",", ":")).encode("utf-8")

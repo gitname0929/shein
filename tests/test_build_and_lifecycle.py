@@ -557,10 +557,9 @@ def test_cli_build_status_activate_rollback(tmp_path: Path, capsys,
 
 
 def test_cli_reserved_commands_exit_nonzero(tmp_path: Path):
+    # infer/annotate are implemented in Stage 03b; iterate/evaluate stay
+    # reserved (never fake exit 0).
     for argv in (
-        ["infer", "--input", "in.jsonl", "--artifacts", "art", "--out", "pred.jsonl"],
-        ["annotate", "--input", "in.jsonl", "--targets", "t.jsonl",
-         "--artifacts", "art", "--out", "ann.jsonl"],
         ["iterate", "--base", "art", "--feedback", "fb.json", "--input", "in.jsonl",
          "--out", "cand"],
         ["evaluate", "--plugin", "p1", "--inputs", "in.jsonl",

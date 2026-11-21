@@ -107,15 +107,16 @@ class RulePlan(BaseModel):
     def gap_for(self, reason_code: str) -> tuple[str, str, tuple[str, ...]] | None:
         """Evidence-gap target for a remaining unknown reason code.
 
-        Plans may override per reason code via ``gap_hints``; the generic
-        fallback points at the plan's own material roles with a neutral
-        predicate so the gateway request stays rule-ID independent.
+        Plans may override per reason code (or ``"*"`` default) via
+        ``gap_hints``; the generic fallback points at the plan's own material
+        roles with its first declared predicate (or a neutral predicate).
         """
-        hint = self.gap_hints.get(reason_code)
+        hint = self.gap_hints.get(reason_code) or self.gap_hints.get("*")
         if hint is not None:
             return hint
         if self.material_roles:
-            return ("object", "observation", tuple(self.material_roles))
+            pred = self.required_predicates[0] if self.required_predicates else "observation"
+            return ("object", pred, tuple(self.material_roles))
         return None
 
 

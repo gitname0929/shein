@@ -277,25 +277,42 @@ def evaluate_r047(task: AuditInput, plan: F08Plan, facts: FactView) -> RuleOutco
 def evaluate_r048(task: AuditInput, plan: F08Plan, facts: FactView) -> RuleOutcome:
     quote = plan.quote("rule_text")
     found = _cert(facts, "withdrawal_date")
-    if found is None:
+    meta_withdrawal = metadata_value(task, "withdrawal_date")
+    w_obs = None
+    if found is not None:
+        e = found[0]
+        w_status, w_value, w_obs = read(facts, e.entity_id, "withdrawal_date")
+        if w_status == ObservationStatus.CONFIRMED_MISSING:
+            if meta_withdrawal is not None:
+                w_status, w_value = ObservationStatus.READABLE, meta_withdrawal
+            else:
+                # 任务提供撤回日期的证明文件才适用本条；确认无撤回日期 -> 不适用.
+                return decide([req(
+                    "withdrawal", RequirementStatus.SATISFIED, "no_withdrawal_date",
+                    "完整清晰范围内确认该证明文件无撤回日期，本条边界不触发",
+                    ev(w_obs, "确认无撤回日期", quote))], plan=plan)
+        if w_status != ObservationStatus.READABLE:
+            return decide([req(
+                "withdrawal", RequirementStatus.UNKNOWN, "withdrawal_date_unreadable",
+                "撤回日期读不清，按证据不足处理", ev(w_obs, "撤回日不可读", quote))],
+                plan=plan)
+    elif meta_withdrawal is not None:
+        # 撤回日由任务元数据提供；仍需从证明文件实体观察签发日与有效期。
+        cert_found = _cert(facts, "issue_date") or _cert(facts, "valid_from")
+        if cert_found is None:
+            if not any(m.role == "certificate_pages" for m in task.materials):
+                return _no_certificate(plan)
+            return decide([req(
+                "withdrawal", RequirementStatus.UNKNOWN, "withdrawal_unobserved",
+                "证明文件签发日与有效期尚未记录观察，证据不足", [])], plan=plan)
+        e = cert_found[0]
+        w_value = meta_withdrawal
+    else:
         if not any(m.role == "certificate_pages" for m in task.materials):
             return _no_certificate(plan)
         return decide([req(
             "withdrawal", RequirementStatus.UNKNOWN, "withdrawal_unobserved",
             "证明文件撤回信息尚未记录观察，证据不足", [])], plan=plan)
-    e = found[0]
-    w_status, w_value, w_obs = read(facts, e.entity_id, "withdrawal_date")
-    if w_status == ObservationStatus.CONFIRMED_MISSING:
-        # 任务提供撤回日期的证明文件才适用本条；确认无撤回日期 -> 不适用.
-        return decide([req(
-            "withdrawal", RequirementStatus.SATISFIED, "no_withdrawal_date",
-            "完整清晰范围内确认该证明文件无撤回日期，本条边界不触发",
-            ev(w_obs, "确认无撤回日期", quote))], plan=plan)
-    if w_status != ObservationStatus.READABLE:
-        return decide([req(
-            "withdrawal", RequirementStatus.UNKNOWN, "withdrawal_date_unreadable",
-            "撤回日期读不清，按证据不足处理", ev(w_obs, "撤回日不可读", quote))],
-            plan=plan)
     i_status, i_value, i_obs = read(facts, e.entity_id, "issue_date")
     if i_status != ObservationStatus.READABLE:
         return decide([req(

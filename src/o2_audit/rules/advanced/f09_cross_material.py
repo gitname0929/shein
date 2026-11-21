@@ -97,10 +97,32 @@ def evaluate_r049(task: AuditInput, plan: F09Plan, facts: FactView) -> RuleOutco
 # ---------------------------------------------------------------------------
 
 
+def _declared_component_map(task: AuditInput) -> dict[str, str] | None:
+    """Resolve R050 declared component mapping from either dict form
+    (``declared_component_map``) or public list-of-dicts form
+    (``declared_components: [{"component_id": ..., "model": ...}]``)."""
+    raw_map = metadata_value(task, "declared_component_map")
+    if isinstance(raw_map, dict) and raw_map:
+        return {str(k): str(v) for k, v in raw_map.items()}
+    raw_list = metadata_value(task, "declared_components")
+    if isinstance(raw_list, list) and raw_list:
+        out: dict[str, str] = {}
+        for item in raw_list:
+            if not isinstance(item, dict):
+                return None
+            cid = item.get("component_id")
+            model = item.get("model")
+            if cid is None or model is None:
+                return None
+            out[str(cid)] = str(model)
+        return out if out else None
+    return None
+
+
 def evaluate_r050(task: AuditInput, plan: F09Plan, facts: FactView) -> RuleOutcome:
     quote = plan.quote("rule_text")
-    declared = metadata_value(task, "declared_component_map")
-    if not isinstance(declared, dict) or not declared:
+    declared_norm = _declared_component_map(task)
+    if not declared_norm:
         return decide([req(
             "component_pairs", RequirementStatus.UNKNOWN, "declared_map_missing",
             "任务未提供申报组件清单（component_id 与型号配对），无法逐项对应", [])],
@@ -118,14 +140,14 @@ def evaluate_r050(task: AuditInput, plan: F09Plan, facts: FactView) -> RuleOutco
             plan=plan)
     # Keyed correspondence: component_id -> model must pair up exactly
     # (dict_correspondence, NOT independent set equality of ids or models).
-    declared_norm = {str(k): str(v) for k, v in declared.items()}
     printed_norm = {str(k): str(v) for k, v in value.items()}
     pairs_match = dict_correspondence(declared_norm, printed_norm,
                                       value=lambda a, b: model_equal(a, b))
     if pairs_match:
         return decide([req(
             "component_pairs", RequirementStatus.SATISFIED, "component_pairs_match",
-            "证明组件表的 component_id 与型号配对和申报清单逐项一致", [])], plan=plan)
+            "证明组件表的 component_id 与型号配对和申报清单逐项一致",
+            ev(obs, f"组件表 {printed_norm}", quote))], plan=plan)
     same_model_set = (set(declared_norm.values()) == set(printed_norm.values())
                       and set(declared_norm.keys()) == set(printed_norm.keys()))
     reason = ("型号集合相同但对应到不同组件 ID，仍不符合"

@@ -47,6 +47,74 @@ def _load_jsonl(path) -> list[dict[str, Any]]:
     return entries
 
 
+# Declarative per-rule ontology mapping: rule_id -> (primary entity kind,
+# required observation predicates in canonical domain.vocabulary.P terms).
+# Populated on every advanced RulePlan so the visual gateway extracts all
+# rule-relevant predicates for each physical entity in one cohesive pass.
+_ADVANCED_ONTOLOGY: dict[str, tuple[str, tuple[str, ...]]] = {
+    "R001": ("package", ("boundary_visible", "interior_obstructed")),
+    "R002": ("package", ("visible_faces",)),
+    "R003": ("document", ("printed_page_number", "total_printed_pages")),
+    "R004": ("label", ("carrier", "attached_to_package")),
+    "R005": ("label", ("interior_obstructed", "model", "material_number", "supplement_field_identity")),
+    "R006": ("document", ("material_authenticity",)),
+    "R007": ("label", ("model",)),
+    "R008": ("package", ("component_models",)),
+    "R009": ("object", ("serial_number",)),
+    "R010": ("label", ("main_model", "compatible_models")),
+    "R011": ("certificate", ("old_model", "replacement_map")),
+    "R012": ("label", ("model",)),
+    "R013": ("label", ("material_number",)),
+    "R014": ("label", ("batch_number",)),
+    "R015": ("label", ("piece_count",)),
+    "R016": ("label", ("support_url", "qr_present")),
+    "R017": ("label", ("valid_from", "valid_until")),
+    "R018": ("label", ("product_name_cn", "product_name_en")),
+    "R019": ("label", ("model", "view_type")),
+    "R020": ("object", ("serial_carrier",)),
+    "R021": ("label", ("model", "material_number")),
+    "R022": ("label", ("material_number", "carrier", "attached_to_package")),
+    "R023": ("label", ("line_crosses_field", "model", "material_number")),
+    "R024": ("object", ("relative_position", "view_type")),
+    "R025": ("object", ("shape_type", "is_closed", "is_filled", "text_inside_mark")),
+    "R026": ("object", ("shape_type", "is_closed", "relative_position")),
+    "R027": ("object", ("shape_type", "mark_bbox", "relative_position")),
+    "R028": ("object", ("color_mode", "shape_type", "mark_color")),
+    "R029": ("object", ("shape_type", "is_filled", "void_marked", "front_fully_shown")),
+    "R030": ("object", ("height_ratio", "view_type")),
+    "R031": ("label", ("verbatim_text",)),
+    "R032": ("label", ("indoor_only_text", "outdoor_durable_text")),
+    "R033": ("label", ("step_list",)),
+    "R034": ("label", ("disassembly_clauses",)),
+    "R035": ("label", ("language_text",)),
+    "R036": ("label", ("verbatim_text",)),
+    "R037": ("label", ("capacity",)),
+    "R038": ("label", ("net_weight", "total_weight")),
+    "R039": ("label", ("adjustable_height_min", "adjustable_height_max")),
+    "R040": ("label", ("component_percentages",)),
+    "R041": ("label", ("front_weight", "back_weight")),
+    "R042": ("label", ("production_date",)),
+    "R043": ("certificate", ("material_number",)),
+    "R044": ("certificate", ("valid_from", "valid_until")),
+    "R045": ("certificate", ("covered_models",)),
+    "R046": ("certificate", ("void_marked",)),
+    "R047": ("certificate", ("document_version",)),
+    "R048": ("certificate", ("withdrawal_date", "issue_date", "valid_from", "valid_until")),
+    "R049": ("label", ("material_number",)),
+    "R050": ("certificate", ("component_model_map",)),
+    "R051": ("label", ("batch_number", "batch_interval")),
+    "R052": ("label", ("package_spec", "model_spec_map")),
+    "R053": ("label", ("model", "material_number", "figure_model", "figure_material_number")),
+    "R054": ("certificate", ("material_number", "contact_info", "void_marked")),
+    "R055": ("label", ("verbatim_text",)),
+    "R056": ("label", ("contents_list",)),
+    "R057": ("label", ("material_number", "carrier", "attached_to_package")),
+    "R058": ("label", ("production_date", "model")),
+    "R059": ("package", ("box_color", "shape_type")),
+    "R060": ("label", ("model", "carrier")),
+}
+
+
 def _clause_quotes(text: str) -> dict[str, str]:
     """Stable quote keys: full text plus numbered clauses (split on ；)."""
     quotes = {"rule_text": text}
@@ -98,6 +166,12 @@ class RuleRegistry:
             raise ValueError(f"no family module registered for {rule_id}")
         family = FAMILY_BY_RULE[rule_id]
         key = (rule_id, str(entry["version"]))
+        roles = tuple(entry.get("material_role_candidates", ()))
+        visual_roles = tuple(r for r in roles if r != "declared_metadata") or roles
+        primary_kind, req_preds = _ADVANCED_ONTOLOGY.get(rule_id, ("object", ()))
+        default_hints: dict[str, tuple[str, str, tuple[str, ...]]] = {}
+        if req_preds and visual_roles:
+            default_hints["*"] = (primary_kind, req_preds[0], visual_roles)
         self._plans[key] = family.PLAN_CLASS(
             rule_id=rule_id,
             rule_version=str(entry["version"]),
@@ -105,8 +179,10 @@ class RuleRegistry:
             title=str(entry.get("title", "")),
             raw_rule_text=str(entry.get("rule_text", "")),
             quotes=_clause_quotes(str(entry.get("rule_text", ""))),
-            material_roles=tuple(entry.get("material_role_candidates", ())),
+            required_predicates=req_preds,
+            material_roles=roles,
             capability_deps=("inspect_material",),
+            gap_hints=default_hints,
         )
         self._evaluators[key] = family.EVALUATORS[rule_id]
         self._applicability[key] = family.APPLICABILITY[rule_id]

@@ -94,6 +94,8 @@ class ZCodeObservationGateway:
         self._max_pixels = max_pixels
         self._materials: dict[str, MaterialRef] = {}
         self._plan_identity = ""
+        self._plan: Any = None
+        self._existing_entities: tuple[tuple[str, str], ...] = ()
         self.last_parse_report: Any = None
         self.last_cache_dropped = 0
         self.usage = UsageStats()
@@ -101,12 +103,31 @@ class ZCodeObservationGateway:
 
     # -- binding ---------------------------------------------------------------
 
-    def bind_task(self, task: AuditInput, *, plan_identity: str = "") -> None:
+    def bind_task(self, task: AuditInput, *, plan_identity: str = "",
+                  plan: Any = None) -> None:
         """Bind the audit unit whose ``MaterialRef`` entries observations may
         cite. ``plan_identity`` (e.g. ``"B001:3.0"``) keeps rule-dependent
         extraction in a separate cache namespace."""
         self._materials = {m.material_id: m for m in task.materials}
         self._plan_identity = plan_identity
+        self._existing_entities = ()
+        if plan is not None:
+            self._plan = plan
+
+    def bind_plan(self, plan: Any) -> None:
+        """Attach the active RulePlan so observation rounds know the rule's
+        canonical required predicates and factual scope (never used to emit
+        verdicts)."""
+        self._plan = plan
+        if plan is not None and not self._plan_identity:
+            self._plan_identity = f"{plan.rule_id}:{plan.rule_version}"
+
+    def set_existing_entities(self, entities: Any) -> None:
+        """Record entity_ids already established for the current audit unit so
+        follow-up rounds reuse them instead of splitting one physical object."""
+        self._existing_entities = tuple(
+            (e.entity_id, e.kind.value) for e in entities
+        )
 
     # -- helpers -----------------------------------------------------------------
 
@@ -185,9 +206,48 @@ class ZCodeObservationGateway:
         loaded = self._load(materials, crops)
         allowed = {m.material_id: m for m in materials}
 
+        target_preds: tuple[str, ...] = ()
+        rule_text = ""
+        if self._plan is not None:
+            raw_preds = tuple(getattr(self._plan, "required_predicates", ()) or ())
+            # Scope B001/certificate vs label predicates cleanly by entity kind
+            if request.entity_kind.value == "certificate":
+                cert_set = {
+                    "material_number", "covered_models", "valid_from", "valid_until",
+                    "issue_date", "withdrawal_date", "void_marked", "document_version",
+                    "component_model_map", "model_spec_map", "contact_info", "old_model",
+                    "replacement_map",
+                }
+                scoped = tuple(p for p in raw_preds if p in cert_set)
+                target_preds = scoped or raw_preds
+            elif request.entity_kind.value == "label":
+                cert_only = {"covered_models", "issue_date", "withdrawal_date",
+                             "document_version", "component_model_map"}
+                scoped = tuple(p for p in raw_preds if p not in cert_only)
+                target_preds = scoped or raw_preds
+            else:
+                target_preds = raw_preds
+            # Keep any factual hint concise (first non-empty line, <=160 chars)
+            # so reasoning VLMs do not burn output tokens adjudicating full
+            # multi-paragraph rule markdown instead of returning observations.
+            raw_text = str(getattr(self._plan, "raw_rule_text", "") or "").strip()
+            if raw_text:
+                first_line = next((ln.strip() for ln in raw_text.splitlines() if ln.strip()), "")
+                rule_text = first_line[:160]
+
         system = observation_system_prompt()
-        user_prompt = build_observation_prompt(request, materials)
-        prompt_hash = prompt_fingerprint(request, materials, system)
+        user_prompt = build_observation_prompt(
+            request, materials,
+            target_predicates=target_preds,
+            rule_text=rule_text,
+            existing_entities=self._existing_entities,
+        )
+        prompt_hash = prompt_fingerprint(
+            request, materials, system,
+            target_predicates=target_preds,
+            rule_text=rule_text,
+            existing_entities=self._existing_entities,
+        )
         # Crops and content hashes in the cache key include page_index so
         # multi-page PDFs with identical file bytes never collide across pages.
         crops_for_key = (

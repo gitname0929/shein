@@ -1,22 +1,34 @@
-# O2 AI 商品审核官 — core repository (Stage 02)
+# O2 AI 商品审核官 — core repository (Stage 03b)
 
 Challenge implementation for the O2 product-review agent: protocol-1.3.1
 inputs, typed observations, all 62 deterministic rule-version evaluators,
-frozen artifact building/verification, version lifecycle, and a four-layer
-runtime. All rules are fictional competition rules (练习规则); nothing here
-performs real regulatory certification.
+frozen artifact building/verification, version lifecycle, a four-layer
+runtime, and real multimodal inference/annotation over the ZCode endpoint.
+All rules are fictional competition rules (练习规则); nothing here performs
+real regulatory certification.
 
-**Stage 02 status: foundation + 62 deterministic rules + frozen artifact build/lifecycle CLI.**
+**Stage 03b status: Stage 02 + materials/gateway (03a) + batch `infer` and
+target-directed `annotate` (03b).**
 Implemented:
-- protocol/JSON strictness, domain models, unified observation vocabulary, shared operators (`text`/`numbers`/`dates`/`sets`/`geometry`), SQLite task & version store;
-- all 62 rule-version plans and deterministic evaluators (`B001@3.0`, `B001@3.1`, `R001..R060@3.0`) wired through `RuleRegistry` and `AuditController`;
-- strict per-record rules JSONL importer, frozen `BUILD_DIR` compiler (`artifact_manifest.json` using vendored `o2_public_contracts.artifact_hash`, capability SHA256 bindings, non-template SOP/policy JSONs, 60-rule ledger CSV), tamper-checking loader, transitive dependency impact analysis, selective incremental rebuild, version activate/rollback, and `o2-audit build` / `status` / `activate` / `rollback` / `compare` CLI.
+- Stage 01/02: protocol/JSON strictness, domain models, shared operators, 62
+  rule-version plans and deterministic evaluators, frozen artifact build/
+  verify/lifecycle CLI;
+- Stage 03a: safe image/PDF loading with crop↔source bbox mapping, credential-
+  free `ModelConfig` (env-var names only), Anthropic-Messages `/v1/messages`
+  client with bounded retries and usage tracking, strict observation/annotation
+  parsers, content-addressed workspace SQLite extraction cache with cross-unit
+  material-ID rebinding, `ZCodeObservationGateway`;
+- Stage 03b: `o2-audit infer` (batch inference runner with resumable workspace
+  state, exact-1-row-per-unit error semantics, protocol validation of every
+  row) and `o2-audit annotate` (target-directed extraction with NFKC+strip-only
+  values, whole-unit labels, honest `<out>.errors.jsonl` failure records).
 
 **Not yet implemented** (later stages):
-- Stage 03: real image/PDF visual & OCR observation gateway and CLI `infer` / `annotate`;
 - Stage 04: isolated evaluation plugins and CLI `evaluate`;
-- Stage 05: feedback-driven iteration (`iterate`), persistent job runner, and FastAPI UI.
-The reserved commands `infer`, `annotate`, `iterate`, and `evaluate` exit non-zero cleanly until their stages are implemented. The test gateway is a deterministic TEST-ONLY stub, not visual recognition.
+- Stage 05: feedback-driven iteration (`iterate`), persistent job runner,
+  FastAPI UI.
+The reserved commands `iterate` and `evaluate` exit non-zero cleanly until
+their stages are implemented.
 
 ## Setup
 

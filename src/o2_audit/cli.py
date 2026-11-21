@@ -1,8 +1,10 @@
-"""``o2-audit`` CLI entrypoint (Stage 02b).
+"""``o2-audit`` CLI entrypoint (Stage 03b).
 
-Public adapter (protocol 1.3.1 signature):
+Official protocol 1.3.1 adapter (exact argument names):
 
     o2-audit build --rules RULES_JSONL --config CONFIG_JSON --out BUILD_DIR
+    o2-audit infer --input INPUT_JSONL --artifacts BUILD_DIR --out PREDICTIONS_JSONL
+    o2-audit annotate --input INPUT_JSONL --targets TARGETS_JSONL --artifacts BUILD_DIR --out ANNOTATIONS_JSONL
 
 Developer/lifecycle subcommands (workspace lives OUTSIDE frozen artifacts):
 
@@ -10,12 +12,12 @@ Developer/lifecycle subcommands (workspace lives OUTSIDE frozen artifacts):
     o2-audit activate --name NAME
     o2-audit rollback --to NAME
 
-``infer`` / ``annotate`` / ``iterate`` / ``evaluate`` are RESERVED exact CLI
-names: they parse the protocol arguments but exit NON-ZERO with an explicit
-"not yet implemented in Stage 02b" message — they never fake exit 0.
+``iterate`` / ``evaluate`` are still RESERVED exact CLI names: they parse the
+protocol arguments but exit NON-ZERO with an explicit "not yet implemented"
+message — they never fake exit 0.
 
-``build`` never reads reference labels: it consumes only the rules JSONL and
-a build config JSON (evaluation runs separately).
+``build`` / ``infer`` / ``annotate`` never read reference labels: evaluation
+runs separately (Stage 04).
 """
 from __future__ import annotations
 
@@ -34,11 +36,12 @@ from o2_audit.build.lifecycle import (
     version_status,
 )
 from o2_audit.build.loader import ArtifactIntegrityError
+from o2_audit.domain.models import ExecutionError
 from o2_audit.protocol.jsonio import ProtocolError, read_json_strict
 from o2_audit.resources import resources_root
 from o2_audit.storage.store import TaskStore
 
-_NOT_IMPLEMENTED = "not yet implemented in Stage 02b"
+_NOT_IMPLEMENTED = "not yet implemented in Stage 03b"
 
 
 def workspace_dir(explicit: str | None = None) -> Path:
@@ -58,8 +61,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         return args.handler(args)
-    except (BuildError, ArtifactIntegrityError, ProtocolError, ValueError,
-            KeyError, FileNotFoundError, OSError) as e:
+    except (BuildError, ArtifactIntegrityError, ProtocolError, ExecutionError,
+            ValueError, KeyError, FileNotFoundError, OSError) as e:
         print(f"o2-audit: error: {e}", file=sys.stderr)
         return 1
 
@@ -71,7 +74,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="o2-audit",
-        description="O2 product-review audit core (Stage 02b: build + lifecycle)")
+        description="O2 product-review audit core "
+                    "(Stage 03b: build + lifecycle + infer + annotate)")
     parser.add_argument(
         "--workspace", default=None,
         help="writable workspace dir for SQLite state "
@@ -106,10 +110,39 @@ def _build_parser() -> argparse.ArgumentParser:
     p_compare.add_argument("--b", required=True)
     p_compare.set_defaults(handler=_cmd_compare)
 
-    p_infer = sub.add_parser("infer", help="[reserved] infer --input --artifacts --out")
-    _add_reserved_args(p_infer, single_input=True, artifacts=True)
-    p_annotate = sub.add_parser("annotate", help="[reserved] annotate --input --targets --artifacts --out")
-    _add_reserved_args(p_annotate, single_input=True, targets=True, artifacts=True)
+    p_infer = sub.add_parser(
+        "infer", help="run inference over INPUT_JSONL with a frozen BUILD_DIR")
+    p_infer.add_argument("--input", required=True)
+    p_infer.add_argument("--artifacts", required=True)
+    p_infer.add_argument("--out", required=True)
+    p_infer.add_argument("--data-root", default=None,
+                         help="data root for material relative paths "
+                              "(default: INPUT_JSONL parent dir)")
+    p_infer.add_argument("--model-config", default=None,
+                         help="model config JSON (default: built-in env-based config)")
+    _add_workspace_arg(p_infer)
+    p_infer.add_argument("--run-id", default=None,
+                         help="run identity (default: deterministic from artifact+input digest)")
+    p_infer.set_defaults(handler=_cmd_infer)
+
+    p_annotate = sub.add_parser(
+        "annotate", help="target-directed annotation over INPUT_JSONL + TARGETS_JSONL")
+    p_annotate.add_argument("--input", required=True)
+    p_annotate.add_argument("--targets", required=True)
+    p_annotate.add_argument("--artifacts", required=True)
+    p_annotate.add_argument("--out", required=True)
+    p_annotate.add_argument("--data-root", default=None,
+                            help="data root for material relative paths "
+                                 "(default: INPUT_JSONL parent dir)")
+    p_annotate.add_argument("--model-config", default=None,
+                            help="model config JSON (default: built-in env-based config)")
+    _add_workspace_arg(p_annotate)
+    p_annotate.add_argument("--run-id", default=None,
+                            help="run identity (default: deterministic from artifact+input digest)")
+    p_annotate.add_argument("--errors-out", default=None,
+                            help="structured error records JSONL "
+                                 "(default: sibling <out>.errors.jsonl)")
+    p_annotate.set_defaults(handler=_cmd_annotate)
     p_iterate = sub.add_parser("iterate", help="[reserved] iterate --base --feedback --input --out")
     _add_reserved_args(p_iterate, single_input=True, base=True, feedback=True)
     p_evaluate = sub.add_parser("evaluate", help="[reserved] evaluate --plugin --inputs --outputs --references --out")
@@ -213,12 +246,59 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_workspace_arg(parser: argparse.ArgumentParser) -> None:
+    """Subparser ``--workspace`` with a distinct dest so the top-level
+    ``--workspace`` value is preserved when the subcommand omits it."""
+    parser.add_argument("--workspace", dest="workspace_sub", default=None,
+                        help="writable workspace dir for SQLite state/traces "
+                             "(default: ./workspace or $O2_AUDIT_WORKSPACE_DIR; "
+                             "never inside artifacts)")
+
+
+def _effective_workspace(args: argparse.Namespace) -> str | None:
+    return args.workspace_sub or args.workspace
+
+
+def _cmd_infer(args: argparse.Namespace) -> int:
+    from o2_audit.runtime.infer import run_inference
+
+    result = run_inference(
+        input_jsonl=args.input,
+        artifacts_dir=args.artifacts,
+        out_path=args.out,
+        data_root=args.data_root,
+        model_config_path=args.model_config,
+        workspace=_effective_workspace(args),
+        run_id=args.run_id,
+    )
+    print(json.dumps(result.summary(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_annotate(args: argparse.Namespace) -> int:
+    from o2_audit.runtime.annotate import run_annotation
+
+    result = run_annotation(
+        input_jsonl=args.input,
+        targets_jsonl=args.targets,
+        artifacts_dir=args.artifacts,
+        out_path=args.out,
+        data_root=args.data_root,
+        model_config_path=args.model_config,
+        workspace=_effective_workspace(args),
+        run_id=args.run_id,
+        errors_out=args.errors_out,
+    )
+    print(json.dumps(result.summary(), ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_not_implemented(args: argparse.Namespace) -> int:
     """Reserved protocol commands NEVER fake exit 0."""
     print(
         f"o2-audit {_NOT_IMPLEMENTED}: command {args.command_name!r} is "
-        "reserved for later stages (materials/inference: Stage 03, "
-        "evaluation: Stage 04). Exiting non-zero; no output files written.",
+        "reserved for later stages (iteration: Stage 05, evaluation: Stage 04). "
+        "Exiting non-zero; no output files written.",
         file=sys.stderr,
     )
     return 2

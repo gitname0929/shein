@@ -153,6 +153,8 @@ class AuditController:
         self._inspected = set()
         active_plan = self._resolve_plan(task)
         self._active_plan = active_plan
+        if self.gateway is not None and hasattr(self.gateway, "bind_plan"):
+            self.gateway.bind_plan(active_plan)
         if self.store is not None:
             self.store.create_run(self.run_id, "prototype", self.artifact_version, {})
             self.store.register_rule(
@@ -336,6 +338,8 @@ class AuditController:
                 return 0  # observations already in store/facts
 
         try:
+            if hasattr(self.gateway, "set_existing_entities"):
+                self.gateway.set_existing_entities(facts.all_entities())
             batch = self.gateway.observe(gap)
         except ExecutionError as e:
             if self.store is not None:
