@@ -12,6 +12,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+from pydantic import model_validator
+
 from o2_audit.domain.models import (
     AuditInput,
     EntityKind,
@@ -50,6 +52,23 @@ class F07Plan(RulePlan):
     weight_rel_tolerance: Decimal = Decimal("0.01")
     #: R042: 生产后 30 个自然日.
     validity_days: int = 30
+
+    @model_validator(mode="before")
+    @classmethod
+    def _revive_tuple_keys(cls, data: Any) -> Any:
+        """JSON round-trip (frozen artifact bundles) serializes the
+        (from_unit, to_unit) dict keys as "from,to" strings; revive them so a
+        frozen plan validates identically to the in-memory plan."""
+        if isinstance(data, dict):
+            data = dict(data)
+            for field_name in ("capacity_factors", "weight_factors", "height_factors"):
+                value = data.get(field_name)
+                if isinstance(value, dict):
+                    data[field_name] = {
+                        (tuple(k.split(",")) if isinstance(k, str) else k): v
+                        for k, v in value.items()
+                    }
+        return data
 
 
 APPLICABILITY: dict[str, Any] = {

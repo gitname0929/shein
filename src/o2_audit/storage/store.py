@@ -93,6 +93,38 @@ CREATE TABLE IF NOT EXISTS artifact_pointers (
     is_active    INTEGER NOT NULL DEFAULT 0,
     activated_at TEXT
 );
+
+-- Stage 02b: immutable artifact version registry (lifecycle).
+CREATE TABLE IF NOT EXISTS artifact_versions (
+    name               TEXT PRIMARY KEY,
+    build_dir          TEXT NOT NULL,
+    artifact_version   TEXT NOT NULL,
+    root_sha256        TEXT NOT NULL,
+    parent_name        TEXT,
+    parent_root_sha256 TEXT,
+    is_active          INTEGER NOT NULL DEFAULT 0,
+    activated_at       TEXT,
+    created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS manual_overrides (
+    override_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_name TEXT NOT NULL,
+    who          TEXT NOT NULL,
+    reason       TEXT NOT NULL,
+    field        TEXT NOT NULL,
+    old_value    TEXT,
+    new_value    TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS version_events (
+    event_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    event     TEXT NOT NULL,
+    version_name TEXT NOT NULL,
+    detail_json  TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -346,6 +378,149 @@ class TaskStore:
             "SELECT name, artifact_id, artifact_version, path, sha256 FROM artifact_pointers WHERE is_active=1"
         ).fetchone()
         return dict(row) if row else None
+
+    # -- artifact version registry (Stage 02b lifecycle) ----------------------
+
+    def record_artifact_version(
+        self,
+        name: str,
+        build_dir: str,
+        artifact_version: str,
+        root_sha256: str,
+        parent_name: str | None = None,
+        parent_root_sha256: str | None = None,
+    ) -> None:
+        """Register one immutable version record.
+
+        Re-recording the SAME identity is idempotent; recording a DIFFERENT
+        digest/path under an existing name raises ValueError (version records
+        are immutable — a changed build must take a new name).
+        """
+        with self._transaction() as cur:
+            row = cur.execute(
+                "SELECT build_dir, artifact_version, root_sha256 FROM artifact_versions WHERE name=?",
+                (name,),
+            ).fetchone()
+            if row is not None:
+                if (row["build_dir"], row["artifact_version"], row["root_sha256"]) != (
+                        str(build_dir), artifact_version, root_sha256):
+                    raise ValueError(
+                        f"artifact version {name!r} is immutable; refusing to overwrite "
+                        f"(registered root={row['root_sha256']}, new root={root_sha256})")
+                return
+            cur.execute(
+                "INSERT INTO artifact_versions(name, build_dir, artifact_version, root_sha256,"
+                " parent_name, parent_root_sha256) VALUES(?,?,?,?,?,?)",
+                (name, str(build_dir), artifact_version, root_sha256,
+                 parent_name, parent_root_sha256),
+            )
+
+    def get_artifact_version(self, name: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT name, build_dir, artifact_version, root_sha256, parent_name,"
+            " parent_root_sha256, is_active, created_at"
+            " FROM artifact_versions WHERE name=?",
+            (name,),
+        ).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["is_active"] = bool(out["is_active"])
+        return out
+
+    def list_artifact_versions(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT name, build_dir, artifact_version, root_sha256, parent_name,"
+            " parent_root_sha256, is_active, created_at"
+            " FROM artifact_versions ORDER BY created_at, name",
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["is_active"] = bool(d["is_active"])
+            out.append(d)
+        return out
+
+    def set_active_version(self, name: str) -> dict[str, Any]:
+        """Atomically move the active pointer to a REGISTERED version.
+
+        The target must exist (KeyError inside the transaction otherwise, so
+        ROLLBACK preserves the previous pointer). Digest verification against
+        the actual directory is the CALLER's duty (lifecycle.activate).
+        """
+        with self._transaction() as cur:
+            row = cur.execute(
+                "SELECT artifact_version FROM artifact_versions WHERE name=?", (name,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"artifact version not registered: {name!r}")
+            cur.execute("UPDATE artifact_versions SET is_active=0 WHERE is_active=1")
+            cur.execute(
+                "UPDATE artifact_versions SET is_active=1, activated_at=datetime('now')"
+                " WHERE name=?",
+                (name,),
+            )
+        return {"active": name, "artifact_version": row["artifact_version"]}
+
+    def active_version_name(self) -> str | None:
+        row = self._conn.execute(
+            "SELECT name FROM artifact_versions WHERE is_active=1"
+        ).fetchone()
+        return row["name"] if row else None
+
+    def record_manual_override(self, version_name: str, who: str, reason: str,
+                               field: str, old_value: Any, new_value: Any) -> int:
+        """Record an explicit manual diff/override (who/reason/field diff)."""
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO manual_overrides(version_name, who, reason, field, old_value, new_value)"
+                " VALUES(?,?,?,?,?,?)",
+                (version_name, who, reason, field,
+                 None if old_value is None else json.dumps(old_value, ensure_ascii=False),
+                 None if new_value is None else json.dumps(new_value, ensure_ascii=False)),
+            )
+            return int(cur.lastrowid)
+
+    def manual_overrides_for(self, version_name: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT override_id, who, reason, field, old_value, new_value, created_at"
+            " FROM manual_overrides WHERE version_name=? ORDER BY override_id",
+            (version_name,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "override_id": r["override_id"],
+                "who": r["who"],
+                "reason": r["reason"],
+                "field": r["field"],
+                "old_value": json.loads(r["old_value"]) if r["old_value"] is not None else None,
+                "new_value": json.loads(r["new_value"]) if r["new_value"] is not None else None,
+                "created_at": r["created_at"],
+            })
+        return out
+
+    def record_version_event(self, event: str, version_name: str,
+                             detail: dict[str, Any] | None) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO version_events(event, version_name, detail_json) VALUES(?,?,?)",
+                (event, version_name,
+                 json.dumps(detail, ensure_ascii=False) if detail is not None else None),
+            )
+
+    def version_events_for(self, version_name: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT event, detail_json, created_at FROM version_events"
+            " WHERE version_name=? ORDER BY event_id",
+            (version_name,),
+        ).fetchall()
+        return [
+            {"event": r["event"],
+             "detail": json.loads(r["detail_json"]) if r["detail_json"] else None,
+             "created_at": r["created_at"]}
+            for r in rows
+        ]
 
 
 def _observation_digest(run_id: str, audit_unit_id: str, obs: Observation) -> str:
