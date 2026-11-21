@@ -23,6 +23,14 @@ The user authorized complete implementation with staged ZCode GLM delegation, su
 
 Each stage requires supervisor review and actually executed checks. This file must distinguish implemented behavior from planned behavior and open limitations. Formal hidden-set/organizer scores are not available.
 
+## Active execution and next steps
+
+- Concurrency rule: run **strictly one ZCode GLM worker at a time** to avoid ZCode 429 rate limiting.
+- **Stage 01 (PASSED review)**: `stage01-foundation-finish-r2` resolved all 6 supervisor review defects, completed the four-layer `AuditController` + `ObservationGateway` prototype, added `README.md`, `.env.example`, `docs/architecture.md`, `resources/` read-only copies, and 98 tests. Supervisor independently fixed the missing `quality` alias in `src/o2_public_contracts/__init__.py` (all 7 vendored contract files remain byte-identical SHA256-verified), ran `uv run pytest -v` (**96 passed, 2 skipped** on Windows non-admin symlink creation), and committed & pushed Stage 01.
+- **Next active stage — Stage 02**: run single ZCode GLM worker on `prompts/stage02_rules_artifacts.md` to implement all 62 rule-version plans (`B001@3.0`, `B001@3.1`, `R001..R060@3.0`), structured observation vocabulary, `o2-audit build` CLI, directory-hash manifest + capability hash bindings, version registry / transitive impact / rollback, and full semantic tests.
+- Sequential pipeline remaining after Stage 02: `stage03_materials_inference.md` → `stage04_evaluation.md` → `stage05_iteration_product.md` → full integration & UI live verification.
+
 ## Review records
 
-No implementation stage has passed review yet.
+- Commits `ef9702d`, `5b3d892`: planning, pinned upstream references, and supervision harness.
+- Stage 01 review: passed (`uv run pytest -v`: 96 passed, 2 skipped [Windows symlink permission]; 7/7 vendored `o2_public_contracts` files SHA256 byte-identical to competition package; `hash_fixture` verified; no secrets in `.env.example` or repo). Open limitations for Stage 01: synthetic fact graphs only (no vision/OCR, no R001–R060, no CLI/UI yet).

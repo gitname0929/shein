@@ -1,0 +1,36 @@
+{
+  "template_only": true,
+  "rule_id": "",
+  "rule_version": "",
+  "source_quotes": [],
+  "sop": {
+    "applicability": {},
+    "facts_to_check": [],
+    "evidence_requirements": [],
+    "normalization": [],
+    "decision_order": [],
+    "label_conditions": {
+      "pass": [],
+      "reject": [],
+      "ambiguous": []
+    },
+    "clarifications": []
+  },
+  "build_policy": {
+    "atomic_capabilities": [],
+    "reuse_decisions": [],
+    "data_requirements": [],
+    "labeling_plan": {},
+    "model_and_tool_config": {},
+    "evaluation_plugins": [],
+    "quality_gates": {},
+    "resource_budget": {},
+    "promotion_conditions": [],
+    "rollback_conditions": []
+  },
+  "artifact": {
+    "version": "",
+    "source_hash": "",
+    "dependencies": []
+  }
+}

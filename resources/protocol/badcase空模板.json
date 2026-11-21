@@ -1,0 +1,19 @@
+{
+  "template_only": true,
+  "case_id": "",
+  "audit_unit_id": "",
+  "sample_id": "",
+  "rule_id": "",
+  "rule_version": "",
+  "sop_version": "",
+  "artifact_version": "",
+  "previous_label": null,
+  "corrected_label": null,
+  "correction_status": "pending",
+  "correction_source": "",
+  "error_category": "",
+  "evidence": [],
+  "teacher_proposal": {},
+  "adoption_decision": "",
+  "feedback_time": ""
+}

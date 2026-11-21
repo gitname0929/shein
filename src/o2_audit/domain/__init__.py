@@ -1,0 +1,38 @@
+"""Typed domain models (protocol 1.3.1 shapes, observations, evidence, errors)."""
+from o2_audit.domain.models import (
+    AllowedAction,
+    AuditInput,
+    Entity,
+    EntityKind,
+    Evidence,
+    ExecutionError,
+    LabelCarrier,
+    MaterialRef,
+    Metadata,
+    NeedEvidence,
+    Observation,
+    ObservationSource,
+    ObservationStatus,
+    RequirementResult,
+    RequirementStatus,
+    validate_bbox_tuple,
+)
+
+__all__ = [
+    "AllowedAction",
+    "AuditInput",
+    "Entity",
+    "EntityKind",
+    "Evidence",
+    "ExecutionError",
+    "LabelCarrier",
+    "MaterialRef",
+    "Metadata",
+    "NeedEvidence",
+    "Observation",
+    "ObservationSource",
+    "ObservationStatus",
+    "RequirementResult",
+    "RequirementStatus",
+    "validate_bbox_tuple",
+]

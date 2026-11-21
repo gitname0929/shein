@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Annotation task protocol 1.3.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "annotation_id",
+    "audit_unit_id",
+    "material_id",
+    "page_index",
+    "target",
+    "value_type",
+    "normalization",
+    "bbox_format"
+  ],
+  "properties": {
+    "annotation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "audit_unit_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "material_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "page_index": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "value_type": {
+      "const": "string_or_null"
+    },
+    "normalization": {
+      "const": "unicode_nfkc_strip"
+    },
+    "bbox_format": {
+      "const": "normalized_xyxy"
+    }
+  }
+}

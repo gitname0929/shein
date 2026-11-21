@@ -1,0 +1,16 @@
+{
+  "plugin_id": "string",
+  "plugin_version": "string",
+  "input_schema_version": "1.3.1",
+  "metrics": {
+    "accuracy": "0..1 or null",
+    "machine_review_rate": "0..1 or null",
+    "machine_accuracy": "0..1 or null",
+    "applicability_accuracy": "0..1 or null",
+    "label_only_accuracy": "diagnostic only",
+    "quality": "0..1 or null; joint label and applicability"
+  },
+  "diagnostics": "array of per-unit diagnostics",
+  "errors": "array of evaluation errors",
+  "note": "A/U/Q use legal outputs with both label and applicability correct. Official totals are computed only by organizer trusted code."
+}

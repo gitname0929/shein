@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.3.1",
+  "feedback_id": "public-demo",
+  "base_artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "items": [
+    {
+      "packet_id": "public-proposal",
+      "audit_unit_id": "ua9df5148546838d9e1ba5e1f51fd00de",
+      "teacher_proposal": "示范建议：请核查指定规则的型号归一化约定。此建议仅用于接口演示。",
+      "teacher_source": "public_demo"
+    }
+  ]
+}

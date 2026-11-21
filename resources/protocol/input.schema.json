@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "title": "Audit input v1.0",
+  "required": [
+    "audit_unit_id",
+    "sample_id",
+    "rule_id",
+    "rule_version",
+    "review_date",
+    "metadata",
+    "materials"
+  ],
+  "properties": {
+    "audit_unit_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sample_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rule_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rule_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review_date": {
+      "type": "string",
+      "minLength": 1
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "materials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "material_id",
+          "role",
+          "relative_path",
+          "media_type",
+          "page_index"
+        ],
+        "properties": {
+          "material_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "relative_path": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?![A-Za-z]+:).+"
+          },
+          "media_type": {
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "application/pdf"
+            ]
+          },
+          "page_index": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

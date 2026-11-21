@@ -1,0 +1,26 @@
+[
+  {
+    "audit_unit_id": "u32a765f6440a3403303a0b145b6dc3a6",
+    "label": "pass",
+    "name": "矩阵关系恢复 match",
+    "note": "同一公开R050谓词，图例说明数据表示；不从有遮挡就直接推ambiguous。"
+  },
+  {
+    "audit_unit_id": "u39d21b031bea2aff8149b77526419171",
+    "label": "reject",
+    "name": "矩阵关系恢复 swap",
+    "note": "同一公开R050谓词，图例说明数据表示；不从有遮挡就直接推ambiguous。"
+  },
+  {
+    "audit_unit_id": "ufc0dd6b9b6bbe78e80956bf9029fa692",
+    "label": "ambiguous",
+    "name": "矩阵关系恢复 unknown",
+    "note": "同一公开R050谓词，图例说明数据表示；不从有遮挡就直接推ambiguous。"
+  },
+  {
+    "audit_unit_id": "uf5ae3e503008d3547346b90c12b2fe15",
+    "label": "reject",
+    "name": "矩阵关系恢复 wrong_and_unknown",
+    "note": "同一公开R050谓词，图例说明数据表示；不从有遮挡就直接推ambiguous。"
+  }
+]

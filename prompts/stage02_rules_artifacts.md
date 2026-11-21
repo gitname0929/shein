@@ -1,6 +1,8 @@
 # Stage 02: all executable rules, build artifacts and version lifecycle
 
-Read AGENTS.md, the completed foundation code/tests and TODO. Extend existing interfaces, do not replace them with an unrelated architecture. Read all resources/rules (or original parent sources if not yet copied), rule supplement/general, protocol/hash/build templates. Do not modify TODO, AGENTS, supervision launcher or status records. No commits/push/subagents.
+Read AGENTS.md, the completed Stage 01 foundation code/tests (`src/o2_audit/`, `src/o2_public_contracts/`, `resources/`) and TODO.md. Extend existing interfaces, do not replace them with an unrelated architecture. Read all rule sources from repo-local `resources/rules/` and protocol/hash templates from `resources/protocol/` (do NOT depend on the parent directory). Do not modify TODO.md, AGENTS.md, tools/run_glm_stage.py, IMPLEMENTATION_STATUS.md, or the 7 vendored files in `src/o2_public_contracts/`. No commits/push/subagents.
+
+Efficiency note: batch independent Read / Edit / Write calls in the same turn whenever possible, and group related rule families cleanly (e.g. by family modules under `src/o2_audit/rules/advanced/`) so all 60 advanced rules are crisp, maintainable, genuinely semantic, and completed well within the stage budget.
 
 ## Deliverables
 

@@ -1,0 +1,8 @@
+{
+  "inventory": {
+    "a.txt": "87428fc522803d31065e7bce3cf03fe475096631e5e07bbd7a0fde60c4cf25c7",
+    "中文/b.txt": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d"
+  },
+  "canonical_utf8_text": "{\"a.txt\":\"87428fc522803d31065e7bce3cf03fe475096631e5e07bbd7a0fde60c4cf25c7\",\"中文/b.txt\":\"3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d\"}",
+  "tree_sha256": "bcb026addbbf331ea2a1773165296633951bf79d37f3ee90da16324668765f8c"
+}
