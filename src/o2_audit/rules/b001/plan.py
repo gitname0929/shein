@@ -16,7 +16,9 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from o2_audit.rules.base import RulePlan
 
 # Stable quote keys -> original rule-text fragments (B001 3.0 wording).
 QUOTES_3_0: dict[str, str] = {
@@ -41,7 +43,12 @@ QUOTES_3_1: dict[str, str] = {
 }
 
 
-class B001Plan(BaseModel):
+class B001Plan(RulePlan):
+    """B001 typed plan; also a :class:`~o2_audit.rules.base.RulePlan` so the
+    registry and controller treat it uniformly (backward-compatible: all new
+    base fields have defaults and ``rule_quotes``/``quote``/``fact_requirements``
+    keep their Stage 01 shape)."""
+
     model_config = ConfigDict(extra="forbid")
 
     rule_id: Literal["B001"] = "B001"
@@ -55,8 +62,13 @@ class B001Plan(BaseModel):
     # shared text operators (rule-ID independence).
     material_number_pattern: str = r"^QLAB-[0-9]{6}$"
     # Concise original rule-text fragments for Evidence.rule_quote, keyed by
-    # stable quote keys (see QUOTES_3_0 / QUOTES_3_1).
+    # stable quote keys (see QUOTES_3_0 / QUOTES_3_1). ``quotes`` (the RulePlan
+    # field) is kept in sync by the factories/registry.
     rule_quotes: dict[str, str] = Field(default_factory=lambda: dict(QUOTES_3_0))
+    required_predicates: tuple[str, ...] = Field(default_factory=lambda: (
+        "model", "material_number", "carrier", "void_marked",
+        "attached_to_package", "covered_models", "valid_from", "valid_until",
+    ))
 
     def quote(self, key: str) -> str | None:
         return self.rule_quotes.get(key)
@@ -80,6 +92,7 @@ def plan_3_0() -> B001Plan:
         rule_version="3.0",
         small_tag_threshold_mm=Decimal("100"),
         rule_quotes=dict(QUOTES_3_0),
+        quotes=dict(QUOTES_3_0),
     )
 
 
@@ -88,4 +101,5 @@ def plan_3_1() -> B001Plan:
         rule_version="3.1",
         small_tag_threshold_mm=Decimal("80"),
         rule_quotes=dict(QUOTES_3_1),
+        quotes=dict(QUOTES_3_1),
     )

@@ -37,12 +37,15 @@ from o2_audit.domain.models import (
     Evidence,
     ExecutionError,
     NeedEvidence,
+    RequirementStatus,
 )
 from o2_audit.protocol.checks import prediction_semantic_errors, visual_evidence_required
 from o2_audit.runtime.facts import FactView
 from o2_audit.runtime.gateway import ObservationGateway
+from o2_audit.rules.base import RulePlan, UnsupportedRuleError
 from o2_audit.rules.b001.evaluate import applicability_precheck, evaluate_b001
 from o2_audit.rules.b001.plan import B001Plan
+from o2_audit.rules.registry import RuleRegistry, default_registry
 from o2_audit.storage.store import TaskStore
 
 # Unknown reason codes that a material inspection can actually resolve,
@@ -61,18 +64,54 @@ _GAP_MAP: dict[str, tuple[EntityKind, str, tuple[str, ...]]] = {
 _MAX_GAPS_PER_ROUND = 3
 _FINAL_STEP = "final_decision"
 
+# Unknown reason codes that no material inspection can resolve: they stem from
+# missing/invalid task metadata or from semantic blocks (undefined thresholds,
+# non-standard views, same-level conflicts). A gateway call would be wasted.
+_NON_ACTIONABLE_EXACT = frozenset({
+    "applicability_unknown",
+    "package_size_missing",
+    "package_size_invalid",
+    "required_faces_missing",
+    "total_pages_missing",
+    "required_version_missing",
+    "language_mode_invalid",
+    "review_date_invalid",
+    "undefined_small_threshold",
+    "grayscale_photo",
+    "non_standard_view",
+    "withdrawal_before_issue",
+    "same_level_conflict",
+})
+
+
+def _non_actionable_reason(code: str) -> bool:
+    """Metadata/semantic blocks (declared_*_missing / declared_*_invalid and
+    the explicit list) can never be fixed by inspecting materials."""
+    if code in _NON_ACTIONABLE_EXACT:
+        return True
+    return code.startswith("declared_") and code.endswith(("_missing", "_invalid"))
+
 
 class AuditController:
-    """Drives one audit unit through the four-layer cycle."""
+    """Drives one audit unit through the four-layer cycle.
+
+    Backward compatible with the Stage 01 B001 usage
+    (``AuditController(plan, gateway, ...)``). The controller ALSO accepts any
+    registered :class:`RulePlan`, or ``plan=None`` with a ``registry``
+    (defaulting to :func:`default_registry`) that resolves
+    ``(task.rule_id, task.rule_version)`` per task — raising
+    :class:`UnsupportedRuleError` for unknown or mismatched pairs.
+    """
 
     def __init__(
         self,
-        plan: B001Plan,
-        gateway: ObservationGateway,
+        plan: RulePlan | None = None,
+        gateway: ObservationGateway | None = None,
         store: TaskStore | None = None,
         run_id: str = "prototype-run",
         artifact_version: str = "b001-prototype-0.1.0",
         max_rounds: int = 3,
+        registry: RuleRegistry | None = None,
     ) -> None:
         self.plan = plan
         self.gateway = gateway
@@ -82,21 +121,43 @@ class AuditController:
         if max_rounds < 0:
             raise ValueError("max_rounds must be >= 0")
         self.max_rounds = max_rounds
+        self.registry = registry
         # Materials whose inspection was actually requested (used to cite
         # honestly-inspected-but-uninformative materials when no observation
         # could be recorded, keeping completed rows protocol-legal).
         self._inspected: set[tuple[str, int]] = set()
+        # Plan resolved for the currently running task (None outside run()).
+        self._active_plan: RulePlan | None = None
 
     # -- public entry ------------------------------------------------------
+
+    def _registry(self) -> RuleRegistry:
+        return self.registry if self.registry is not None else default_registry()
+
+    def _resolve_plan(self, task: AuditInput) -> RulePlan:
+        """Plan for this task: the explicit plan must match the requested
+        (rule_id, version); with ``plan=None`` the registry resolves it and
+        raises :class:`UnsupportedRuleError` for unregistered pairs."""
+        if self.plan is not None:
+            if (task.rule_id, task.rule_version) \
+                    != (self.plan.rule_id, self.plan.rule_version):
+                raise UnsupportedRuleError(task.rule_id, task.rule_version)
+            return self.plan
+        return self._registry().get_plan(task.rule_id, task.rule_version)
 
     def run(self, task: AuditInput) -> dict[str, Any]:
         started = time.monotonic()
         task_id = task.audit_unit_id
+        # Multi-task reuse of one controller must never leak inspected
+        # material IDs across units.
+        self._inspected = set()
+        active_plan = self._resolve_plan(task)
+        self._active_plan = active_plan
         if self.store is not None:
             self.store.create_run(self.run_id, "prototype", self.artifact_version, {})
             self.store.register_rule(
-                self.plan.rule_id, self.plan.rule_version,
-                self.plan.model_dump(mode="json"), self.artifact_version,
+                active_plan.rule_id, active_plan.rule_version,
+                active_plan.model_dump(mode="json"), self.artifact_version,
             )
             self.store.ensure_task(task_id, self.run_id, task.audit_unit_id,
                                    f"{task.audit_unit_id}:{task.rule_id}:{task.rule_version}")
@@ -112,15 +173,22 @@ class AuditController:
                 return cached
 
         # Intent layer: applicability from metadata first — a known-false or
-        # unknown applicability never reaches the gateway.
-        applicability, _missing = applicability_precheck(task, self.plan)
-        outcome = evaluate_b001(task, self.plan, facts)
-        if applicability != "applicable":
-            return self._finalize(task, outcome, facts, started)
+        # unknown applicability never reaches the gateway. B001 keeps its
+        # own (backward-compatible) outcome shape; advanced rules short-circuit
+        # through the shared applicability outcomes.
+        if isinstance(active_plan, B001Plan):
+            applicability, _missing = applicability_precheck(task, active_plan)
+            outcome = evaluate_b001(task, active_plan, facts)
+            if applicability != "applicable":
+                return self._finalize(task, outcome, facts, started)
+        else:
+            outcome = self._registry().evaluate(task, facts, active_plan)
+            if outcome.applicability != "applicable":
+                return self._finalize(task, outcome, facts, started)
 
         rounds = 0
         while rounds < self.max_rounds:
-            gaps = self._need_evidence(outcome, task)
+            gaps = self._need_evidence(outcome, task, active_plan)
             if not gaps:
                 break
             new_observations = 0
@@ -131,10 +199,15 @@ class AuditController:
                 new_observations += result
             if new_observations == 0:
                 break  # gateway made no progress; stop instead of looping
-            outcome = evaluate_b001(task, self.plan, facts)
+            outcome = self._evaluate(task, active_plan, facts)
             rounds += 1
 
         return self._finalize(task, outcome, facts, started)
+
+    def _evaluate(self, task: AuditInput, plan: RulePlan, facts: FactView):
+        if isinstance(plan, B001Plan):
+            return evaluate_b001(task, plan, facts)
+        return self._registry().evaluate(task, facts, plan)
 
     # -- semantic layer ------------------------------------------------------
 
@@ -165,9 +238,10 @@ class AuditController:
         return []
 
     def _state_digest(self, task: AuditInput, facts: FactView) -> str:
+        plan = self._active_plan
         payload = {
             "task": self._task_json(task),
-            "plan": f"{self.plan.rule_id}:{self.plan.rule_version}",
+            "plan": f"{plan.rule_id}:{plan.rule_version}" if plan is not None else None,
             "entities": sorted(e.entity_id for e in facts.all_entities()),
             "observations": [
                 o.model_dump_json() for o in
@@ -186,19 +260,41 @@ class AuditController:
 
     # -- intent / planning layer ----------------------------------------------
 
-    def _need_evidence(self, outcome: Any, task: AuditInput) -> list[NeedEvidence]:
+    def _need_evidence(self, outcome: Any, task: AuditInput,
+                       plan: RulePlan | None = None) -> list[NeedEvidence]:
         """Turn remaining conclusion-affecting unknowns into permitted
-        inspection requests (bounded per round)."""
+        inspection requests (bounded per round).
+
+        B001 keeps its Stage 01 gap map exactly. For any other plan, an UNKNOWN
+        requirement whose reason code is actionable (not a metadata/semantic
+        block) is mapped through ``plan.gap_for``; if the role filter matches
+        no task material, all task materials become candidates.
+        """
         gaps: list[NeedEvidence] = []
         seen: set[tuple[str, str]] = set()
+        is_b001 = isinstance(plan, B001Plan)
         for r in outcome.results:
-            if r.reason_code not in _GAP_MAP:
+            if r.status != RequirementStatus.UNKNOWN:
                 continue
-            kind, predicate, roles = _GAP_MAP[r.reason_code]
+            if r.reason_code in _GAP_MAP:
+                kind, predicate, roles = _GAP_MAP[r.reason_code]
+            elif is_b001 or _non_actionable_reason(r.reason_code):
+                continue
+            elif plan is not None:
+                hint = plan.gap_for(r.reason_code)
+                if hint is None:
+                    continue
+                kind, predicate, roles = EntityKind(hint[0]), hint[1], hint[2]
+            else:
+                continue
             if r.reason_code in seen:
                 continue
             seen.add(r.reason_code)
             candidates = [m.material_id for m in task.materials if m.role in roles]
+            if not candidates and not is_b001:
+                # Role filter matched nothing: the inspection may still find
+                # the predicate on any submitted material.
+                candidates = [m.material_id for m in task.materials]
             gaps.append(NeedEvidence(
                 entity_kind=kind,
                 predicate=predicate,

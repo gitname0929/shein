@@ -45,27 +45,14 @@ from o2_audit.operators.text import (
     model_equal,
 )
 from o2_audit.runtime.facts import FactView, consolidate
+from o2_audit.rules.base import RuleOutcome
 from o2_audit.rules.b001.plan import B001Plan
 
 
-class B001Outcome:
-    def __init__(
-        self,
-        applicability: str,
-        label: str,
-        reason_code: str,
-        reason: str,
-        results: list[RequirementResult],
-        evidence: list[Evidence],
-        missing_applicability_conditions: list[str] | None = None,
-    ) -> None:
-        self.applicability = applicability
-        self.label = label
-        self.reason_code = reason_code
-        self.reason = reason
-        self.results = results
-        self.evidence = evidence
-        self.missing_applicability_conditions = missing_applicability_conditions or []
+class B001Outcome(RuleOutcome):
+    """Backward-compatible alias: identical constructor/attributes as Stage 01,
+    now shared with every advanced rule via :class:`RuleOutcome`."""
+
 
 
 # ---------------------------------------------------------------------------
