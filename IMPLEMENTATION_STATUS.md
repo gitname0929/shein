@@ -8,7 +8,9 @@ The user authorized complete implementation with staged ZCode GLM delegation, su
 - Existing TODO contains the full intended scope; implementation boxes remain unchecked until reviewed.
 - Python 3.12.10 and uv 0.12.9 are available. Prefer the installed Python rather than downloading 3.11.
 - ZCode model route `zcode/GLM-5.3-Flash` has passed both direct and native custom-subagent connectivity tests.
-- Remote contents/authentication are being checked.
+- Remote was empty; reviewed planning commit ef9702d was pushed to origin/main successfully.
+- Stage 01 GLM worker is implementing foundation/core. A separate GLM worker owns only evaluation modules and evaluation tests, with non-overlapping write scope.
+- Supervisor pinned both upstream references in docs/upstream_references.md and added semantic acceptance gates in docs/supervisor_acceptance.md.
 
 ## Stages
 
