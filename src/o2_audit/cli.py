@@ -1,10 +1,11 @@
-"""``o2-audit`` CLI entrypoint (Stage 03b).
+"""``o2-audit`` CLI entrypoint (Stage 04).
 
-Official protocol 1.3.1 adapter (exact argument names):
+Official protocol 1.3.1 adapters (exact argument names):
 
     o2-audit build --rules RULES_JSONL --config CONFIG_JSON --out BUILD_DIR
     o2-audit infer --input INPUT_JSONL --artifacts BUILD_DIR --out PREDICTIONS_JSONL
     o2-audit annotate --input INPUT_JSONL --targets TARGETS_JSONL --artifacts BUILD_DIR --out ANNOTATIONS_JSONL
+    o2-audit evaluate --plugin PLUGIN_ID --inputs INPUT_JSONL --outputs PREDICTIONS_JSONL --references REFERENCES_JSONL --out REPORT_JSON
 
 Developer/lifecycle subcommands (workspace lives OUTSIDE frozen artifacts):
 
@@ -12,12 +13,11 @@ Developer/lifecycle subcommands (workspace lives OUTSIDE frozen artifacts):
     o2-audit activate --name NAME
     o2-audit rollback --to NAME
 
-``iterate`` / ``evaluate`` are still RESERVED exact CLI names: they parse the
-protocol arguments but exit NON-ZERO with an explicit "not yet implemented"
-message — they never fake exit 0.
+``iterate`` is RESERVED for Stage 05: it parses protocol arguments but exits
+NON-ZERO with an explicit "not yet implemented" message — never fake exit 0.
 
-``build`` / ``infer`` / ``annotate`` never read reference labels: evaluation
-runs separately (Stage 04).
+``build`` / ``infer`` / ``annotate`` never read reference labels; evaluation
+runs only inside the isolated ``o2-audit evaluate`` subprocess boundary.
 """
 from __future__ import annotations
 
@@ -37,11 +37,11 @@ from o2_audit.build.lifecycle import (
 )
 from o2_audit.build.loader import ArtifactIntegrityError
 from o2_audit.domain.models import ExecutionError
-from o2_audit.protocol.jsonio import ProtocolError, read_json_strict
+from o2_audit.protocol.jsonio import ProtocolError, read_json_strict, write_json_atomic
 from o2_audit.resources import resources_root
 from o2_audit.storage.store import TaskStore
 
-_NOT_IMPLEMENTED = "not yet implemented in Stage 03b"
+_NOT_IMPLEMENTED = "not yet implemented in Stage 04"
 
 
 def workspace_dir(explicit: str | None = None) -> Path:
@@ -145,8 +145,44 @@ def _build_parser() -> argparse.ArgumentParser:
     p_annotate.set_defaults(handler=_cmd_annotate)
     p_iterate = sub.add_parser("iterate", help="[reserved] iterate --base --feedback --input --out")
     _add_reserved_args(p_iterate, single_input=True, base=True, feedback=True)
-    p_evaluate = sub.add_parser("evaluate", help="[reserved] evaluate --plugin --inputs --outputs --references --out")
-    _add_reserved_args(p_evaluate, plugin=True, inputs_outputs=True, references=True)
+
+    p_evaluate = sub.add_parser(
+        "evaluate",
+        help="run an isolated evaluation plugin (protocol 1.3.1)",
+    )
+    p_evaluate.add_argument(
+        "--plugin", required=True,
+        help="registered plugin ID/alias (conclusion, evidence, version_compare) "
+             "or direct module:function entry",
+    )
+    p_evaluate.add_argument("--inputs", required=True, help="audit inputs JSONL")
+    p_evaluate.add_argument("--outputs", required=True, help="predictions JSONL")
+    p_evaluate.add_argument(
+        "--references", default=None,
+        help="optional public/evaluation reference labels JSONL",
+    )
+    p_evaluate.add_argument("--out", required=True, help="output report JSON path")
+    p_evaluate.add_argument(
+        "--baseline-outputs", default=None,
+        help="optional baseline predictions JSONL (for version_compare)",
+    )
+    p_evaluate.add_argument(
+        "--timeout", type=float, default=None,
+        help="per-plugin timeout seconds (overrides config / PLUGIN_TIMEOUT_SECONDS)",
+    )
+    p_evaluate.add_argument(
+        "--purpose", default="local_evaluation",
+        help="evaluation context purpose string (default: local_evaluation)",
+    )
+    p_evaluate.add_argument(
+        "--expected-artifact-version", default=None,
+        help="optional expected artifact_version to enforce during scoring",
+    )
+    p_evaluate.add_argument(
+        "--plugin-config", default=None,
+        help="optional plugin manifest JSON overriding bundled plugins_config.json",
+    )
+    p_evaluate.set_defaults(handler=_cmd_evaluate)
     return parser
 
 
@@ -293,11 +329,67 @@ def _cmd_annotate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_evaluate(args: argparse.Namespace) -> int:
+    # Isolated evaluation imports live strictly inside _cmd_evaluate so build/
+    # infer/annotate paths never load reference/evaluation modules.
+    from o2_audit.evaluation.manifest import SCHEMA_VERSION, load_plugin_registry
+    from o2_audit.evaluation.runner import run_plugin
+    from o2_public_contracts import contracts as public_contracts
+
+    registry = load_plugin_registry(args.plugin_config)
+    spec = registry.resolve(args.plugin)
+
+    try:
+        inputs = public_contracts.read_rows(args.inputs)
+        outputs = public_contracts.read_rows(args.outputs)
+        references = (
+            public_contracts.read_rows(args.references)
+            if args.references
+            else []
+        )
+        baseline_outputs = (
+            public_contracts.read_rows(args.baseline_outputs)
+            if args.baseline_outputs
+            else None
+        )
+    except public_contracts.ContractError as exc:
+        raise ProtocolError(str(exc)) from exc
+
+    context: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "purpose": args.purpose,
+    }
+    if args.expected_artifact_version:
+        context["expected_artifact_version"] = args.expected_artifact_version
+    if baseline_outputs is not None:
+        context["baseline_outputs"] = baseline_outputs
+
+    report = run_plugin(
+        spec,
+        inputs=inputs,
+        outputs=outputs,
+        references=references,
+        context=context,
+        timeout=args.timeout,
+    )
+    out_path = Path(args.out)
+    write_json_atomic(out_path, report)
+    print(json.dumps({
+        "plugin_id": report.get("plugin_id"),
+        "plugin_version": report.get("plugin_version"),
+        "status": report.get("status", "error" if report.get("errors") else "ok"),
+        "out": str(out_path),
+        "metrics": report.get("metrics", {}),
+        "errors": report.get("errors", []),
+    }, ensure_ascii=False, indent=2))
+    return 1 if report.get("errors") else 0
+
+
 def _cmd_not_implemented(args: argparse.Namespace) -> int:
     """Reserved protocol commands NEVER fake exit 0."""
     print(
         f"o2-audit {_NOT_IMPLEMENTED}: command {args.command_name!r} is "
-        "reserved for later stages (iteration: Stage 05, evaluation: Stage 04). "
+        "reserved for Stage 05 (safe iteration). "
         "Exiting non-zero; no output files written.",
         file=sys.stderr,
     )

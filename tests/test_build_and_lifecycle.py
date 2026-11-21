@@ -557,13 +557,11 @@ def test_cli_build_status_activate_rollback(tmp_path: Path, capsys,
 
 
 def test_cli_reserved_commands_exit_nonzero(tmp_path: Path):
-    # infer/annotate are implemented in Stage 03b; iterate/evaluate stay
-    # reserved (never fake exit 0).
+    # infer/annotate (Stage 03b) and evaluate (Stage 04) are implemented;
+    # iterate stays reserved until Stage 05 (never fake exit 0).
     for argv in (
         ["iterate", "--base", "art", "--feedback", "fb.json", "--input", "in.jsonl",
          "--out", "cand"],
-        ["evaluate", "--plugin", "p1", "--inputs", "in.jsonl",
-         "--outputs", "pred.jsonl", "--references", "ref.jsonl", "--out", "rep.json"],
     ):
         assert cli_main(argv) != 0  # NEVER fake exit 0
     out_dir = tmp_path / "never_written"

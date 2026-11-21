@@ -59,3 +59,18 @@ def dump_json_strict(obj: Any) -> str:
         return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     except ValueError as e:
         raise ProtocolError(f"value not strictly serializable: {e}") from e
+
+
+def write_json_atomic(path: str | Path, obj: Any, *, indent: int = 2) -> Path:
+    """Atomically write strictly finite UTF-8 JSON (temp file + replace)."""
+    import os
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        text = json.dumps(obj, ensure_ascii=False, indent=indent, allow_nan=False) + "\n"
+    except ValueError as e:
+        raise ProtocolError(f"value not strictly serializable: {e}") from e
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, target)
+    return target

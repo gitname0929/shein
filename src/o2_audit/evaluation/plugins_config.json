@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.3.1",
+  "plugins": [
+    {
+      "plugin_id": "o2.conclusion",
+      "aliases": ["conclusion"],
+      "entry": "o2_audit.evaluation.conclusion:evaluate",
+      "plugin_version": "1.0.0",
+      "enabled": true,
+      "timeout_seconds": 30.0,
+      "description": "Protocol 1.3.1 joint label+applicability conclusion quality evaluator (A/U/Q/M, frozen denominator, per-rule breakdown, optional contrasts)."
+    },
+    {
+      "plugin_id": "o2.evidence",
+      "aliases": ["evidence"],
+      "entry": "o2_audit.evaluation.evidence:evaluate",
+      "plugin_version": "1.0.0",
+      "enabled": true,
+      "timeout_seconds": 30.0,
+      "description": "Separates evidence reference structure validity from semantic content grounding against reference visible_facts or pluggable visual verifiers."
+    },
+    {
+      "plugin_id": "o2.version_compare",
+      "aliases": ["version_compare", "compare"],
+      "entry": "o2_audit.evaluation.compare:evaluate",
+      "plugin_version": "1.0.0",
+      "enabled": true,
+      "timeout_seconds": 30.0,
+      "description": "Rule/version-aligned version comparator (repaired/new_error/unchanged with truth; prediction_diff_only without truth)."
+    }
+  ]
+}
