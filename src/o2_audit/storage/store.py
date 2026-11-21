@@ -125,6 +125,14 @@ CREATE TABLE IF NOT EXISTS version_events (
     detail_json  TEXT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Stage 03a: content-addressed extraction cache for the observation gateway
+-- (lives in the workspace SQLite, NEVER inside frozen artifacts).
+CREATE TABLE IF NOT EXISTS extraction_cache (
+    cache_key    TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -340,6 +348,23 @@ class TaskStore:
                 source=ObservationSource.model_validate_json(r["source_json"]) if r["source_json"] else None,
             ))
         return out
+
+    # -- extraction cache (Stage 03a) -----------------------------------------
+
+    def cache_get(self, key: str) -> dict[str, Any] | None:
+        """Content-addressed gateway extraction cache lookup (workspace DB)."""
+        row = self._conn.execute(
+            "SELECT payload_json FROM extraction_cache WHERE cache_key=?", (key,)
+        ).fetchone()
+        return json.loads(row["payload_json"]) if row else None
+
+    def cache_put(self, key: str, payload: dict[str, Any]) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "INSERT INTO extraction_cache(cache_key, payload_json) VALUES(?,?)"
+                " ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json",
+                (key, json.dumps(payload, ensure_ascii=False)),
+            )
 
     # -- active artifact pointer ----------------------------------------------
 

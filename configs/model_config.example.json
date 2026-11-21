@@ -1,0 +1,13 @@
+{
+  "model": "zcode/GLM-5.3-Flash",
+  "base_url_env": "O2_BASE_URL",
+  "base_url_fallback_env": "ANTHROPIC_BASE_URL",
+  "api_key_env": "O2_API_KEY",
+  "api_key_fallback_env": "ANTHROPIC_AUTH_TOKEN",
+  "anthropic_version": "2023-06-01",
+  "max_tokens": 4096,
+  "timeout_seconds": 90.0,
+  "max_retries": 2,
+  "temperature": 0.0,
+  "retry_backoff_seconds": 0.5
+}
